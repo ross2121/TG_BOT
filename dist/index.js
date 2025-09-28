@@ -16,53 +16,101 @@ const telegraf_1 = require("telegraf");
 const dotenv_1 = __importDefault(require("dotenv"));
 const web3_js_1 = require("@solana/web3.js");
 const dlmm_sdk_1 = require("@saros-finance/dlmm-sdk");
+const client_1 = require("@prisma/client");
 dotenv_1.default.config();
-const USDC_TOKEN = {
-    id: "usd-coin",
-    mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    symbol: "usdc",
-    name: "USD Coin",
-    decimals: 6,
-    addressSPL: "FXRiEosEvHnpc3XZY1NS7an2PB1SunnYW1f5zppYhXb3",
-};
-const C98_TOKEN = {
-    id: "coin98",
-    mintAddress: "C98A4nkJXhpVZNAZdHUA95RpTF3T4whtQubL3YobiUX9",
-    symbol: "C98",
-    name: "Coin98",
-    decimals: 6,
-    addressSPL: "EKCdCBjfQ6t5FBfDC2zvmr27PgfVVZU37C8LUE4UenKb",
-};
-const POOL_PARAMS = {
-    address: "EwsqJeioGAXE5EdZHj1QvcuvqgVhJDp9729H5wjh28DD",
-    baseToken: C98_TOKEN,
-    quoteToken: USDC_TOKEN,
-    slippage: 0.5,
-    hook: "", // config for reward, adding later
-};
+const prisma = new client_1.PrismaClient();
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
-const DEFAULT_KEYBOARD = telegraf_1.Markup.inlineKeyboard([[
-        telegraf_1.Markup.button.callback("Enter  the wallet you want to track", "track"),
-        telegraf_1.Markup.button.callback("Positions", "Postion")
-    ]]);
+const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+const userStates = new Map();
+const DEFAULT_KEYBOARD = telegraf_1.Markup.inlineKeyboard([
+    [telegraf_1.Markup.button.callback("📊 Track Wallet Positions", "track_positions")]
+]);
 bot.start((ctx) => __awaiter(void 0, void 0, void 0, function* () {
-    ctx.reply("Welcome to the bot ", Object.assign({}, DEFAULT_KEYBOARD));
+    yield ctx.reply("Welcome to the Saros DLMM Bot! 🚀\n\nChoose an option to begin:", Object.assign({}, DEFAULT_KEYBOARD));
 }));
-bot.action("track", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
-    ctx.reply("Enter the public key");
+bot.action("track_positions", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    userStates.set(ctx.from.id, { step: 'awaiting_pool' });
+    yield ctx.reply("🏊 Please enter the pool address you want to analyze:");
 }));
 bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    const userId = ctx.from.id;
     const message = ctx.message.text;
-    const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
-        mode: dlmm_sdk_1.MODE.MAINNET,
-    });
-    const publickey = new web3_js_1.PublicKey("2KZwHB3m1NZJiGzr7isRqypGeCJpT5H9NjrRZw2wHuKD");
-    const data = yield liquidityBookService.getPositionAccount(publickey);
-    console.log(data);
-    // const poolPositions = await liquidityBookService.getUserPositions({
-    //     payer: new PublicKey(message),
-    //     pair: new PublicKey("YOUR_PAIR_ADDRESS") 
-    // });
+    const userState = userStates.get(userId);
+    if (!userState) {
+        yield ctx.reply("Please use the menu buttons to start! 👆", Object.assign({}, DEFAULT_KEYBOARD));
+        return;
+    }
+    try {
+        const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
+            mode: dlmm_sdk_1.MODE.MAINNET,
+            options: {
+                rpcUrl: RPC_URL,
+            },
+        });
+        if (userState.step === 'awaiting_pool') {
+            try {
+                new web3_js_1.PublicKey(message);
+            }
+            catch (error) {
+                yield ctx.reply("❌ Invalid pool address. Please enter a valid Solana public key:");
+                return;
+            }
+            userState.pool = message;
+            userState.step = 'awaiting_wallet';
+            yield ctx.reply(`✅ Pool address saved: ${message}\n\n📝 Now, please enter the wallet public key to check for positions:`);
+        }
+        else if (userState.step === 'awaiting_wallet') {
+            const poolAddress = userState.pool;
+            const walletAddress = message;
+            try {
+                new web3_js_1.PublicKey(walletAddress);
+            }
+            catch (error) {
+                yield ctx.reply("❌ Invalid wallet address. Please enter a valid Solana public key:");
+                return;
+            }
+            yield ctx.reply(`⏳ Searching for positions for wallet ${walletAddress} in pool ${poolAddress}...`);
+            const positions = yield liquidityBookService.getUserPositions({
+                payer: new web3_js_1.PublicKey(walletAddress),
+                pair: new web3_js_1.PublicKey(poolAddress)
+            });
+            if (positions.length === 0) {
+                yield ctx.reply(`🤷 No positions found for wallet \`${walletAddress}\` in pool \`${poolAddress}\`.`, { parse_mode: 'Markdown' });
+                userStates.delete(userId);
+                return;
+            }
+            let response = `🎯 **Analysis Complete**\n\n`;
+            response += `📍 **Pool Address:** \`${poolAddress}\`\n`;
+            response += `👤 **Wallet:** \`${walletAddress}\`\n`;
+            response += `📊 **Total Positions Found:** ${positions.length}\n\n`;
+            const positionData = positions.map(position => ({
+                mint: position.positionMint.toString(),
+                lowerId: position.lowerBinId.toString(),
+                upperId: position.upperBinId.toString()
+            }));
+            positions.forEach((position, index) => {
+                response += `*Position ${index + 1}*\n`;
+                response += ` •  *Mint:* \`${position.positionMint}\`\n`;
+                response += ` •  *Lower Bin ID:* ${position.lowerBinId}\n`;
+                response += ` •  *Upper Bin ID:* ${position.upperBinId}\n\n`;
+            });
+            yield prisma.user.create({
+                data: {
+                    telegram_id: userId.toString(),
+                    positions: {
+                        create: positionData
+                    }
+                }
+            });
+            yield ctx.reply(response, { parse_mode: 'Markdown' });
+            userStates.delete(userId); // Clean up state after completion
+        }
+    }
+    catch (error) {
+        console.error("Error:", error);
+        yield ctx.reply("❌ An unexpected error occurred. Please try again.");
+        userStates.delete(userId); // Clean up state on error
+    }
 }));
 function temp() {
     return __awaiter(this, void 0, void 0, function* () {
@@ -72,11 +120,19 @@ function temp() {
         const publickey = new web3_js_1.PublicKey("HvFfbbDXggmz7UfE21rdL8x6RBX5RpEPvw7kUJVkCk9A");
         // const data= await liquidityBookService.getPositionAccount(publickey);
         // console.log(data);
+        const pairInfo = yield liquidityBookService.getPairAccount(new web3_js_1.PublicKey("9P3N4QxjMumpTNNdvaNNskXu2t7VHMMXtePQB72kkSAk"));
+        const activeBin = pairInfo.activeId;
+        //         const pul= await   liquidityBookService.
+        //    console.log(pul);
         const poolPositions = yield liquidityBookService.getUserPositions({
             payer: publickey,
             pair: new web3_js_1.PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3")
         });
         console.log(poolPositions);
+        console.log(pairInfo);
+        //8377610
     });
 }
 temp();
+bot.launch();
+console.log("Bot is running...");
