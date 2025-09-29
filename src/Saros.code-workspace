@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../dlmm-saros-sdk"
+		}
+	],
+	"settings": {}
+}

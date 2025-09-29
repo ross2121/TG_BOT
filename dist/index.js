@@ -17,6 +17,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const web3_js_1 = require("@solana/web3.js");
 const dlmm_sdk_1 = require("@saros-finance/dlmm-sdk");
 const client_1 = require("@prisma/client");
+const monitor_1 = require("./monitor");
 dotenv_1.default.config();
 const prisma = new client_1.PrismaClient();
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
@@ -86,7 +87,9 @@ bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
             const positionData = positions.map(position => ({
                 mint: position.positionMint.toString(),
                 lowerId: position.lowerBinId.toString(),
-                upperId: position.upperBinId.toString()
+                upperId: position.upperBinId.toString(),
+                Market: poolAddress,
+                Status: client_1.Status.Active
             }));
             positions.forEach((position, index) => {
                 response += `*Position ${index + 1}*\n`;
@@ -133,6 +136,7 @@ function temp() {
         //8377610
     });
 }
-temp();
+(0, monitor_1.monitor)();
+// temp();
 bot.launch();
 console.log("Bot is running...");

@@ -23,6 +23,12 @@ model Position {
   mint     String
   lowerId  String
   upperId  String
+  Market   String
+  Status   Status
   userId   String
   user     User   @relation(fields: [userId], references: [id])
+}
+enum Status{
+  Active 
+  UnActive
 }
