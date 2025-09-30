@@ -15,6 +15,7 @@ datasource db {
 model User {
   id        String     @id @default(cuid())
   telegram_id String
+  public_key  String
   positions Position[]
 }
 
@@ -25,6 +26,7 @@ model Position {
   upperId  String
   Market   String
   Status   Status
+  Previous  Float @default(0.0)
   userId   String
   user     User   @relation(fields: [userId], references: [id])
 }

@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { PublicKey } from "@solana/web3.js";
 import { LiquidityBookServices, MODE } from "@saros-finance/dlmm-sdk";
 import { PrismaClient, Status } from "@prisma/client";
-import { monitor } from "./monitor";
+import { calculatepositon, monitor } from "./monitor";
 dotenv.config();
 const prisma=new PrismaClient();
 const bot = new Telegraf(process.env.TELEGRAM_API || "");
@@ -80,10 +80,10 @@ bot.on("text", async (ctx) => {
                 mint: position.positionMint.toString(),
                 lowerId: position.lowerBinId.toString(),
                 upperId: position.upperBinId.toString(),
+                Previous:0.0,
                 Market:poolAddress,
                 Status: Status.Active
             }));
-            
             positions.forEach((position, index) => {
                 response += `*Position ${index + 1}*\n`;
                 response += ` •  *Mint:* \`${position.positionMint}\`\n`;
@@ -93,6 +93,7 @@ bot.on("text", async (ctx) => {
             await prisma.user.create({
                 data: {
                     telegram_id: userId.toString(),
+                    public_key: walletAddress,
                     positions: {
                         create: positionData
                     }
@@ -128,7 +129,8 @@ async function temp(){
     console.log(pairInfo);
     //8377610
 }
-monitor();
+// monitor();
+calculatepositon("USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA","CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn");
 // temp();
 bot.launch();
 console.log("Bot is running...");

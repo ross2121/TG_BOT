@@ -88,6 +88,7 @@ bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
                 mint: position.positionMint.toString(),
                 lowerId: position.lowerBinId.toString(),
                 upperId: position.upperBinId.toString(),
+                Previous: 0.0,
                 Market: poolAddress,
                 Status: client_1.Status.Active
             }));
@@ -100,6 +101,7 @@ bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
             yield prisma.user.create({
                 data: {
                     telegram_id: userId.toString(),
+                    public_key: walletAddress,
                     positions: {
                         create: positionData
                     }
@@ -136,7 +138,8 @@ function temp() {
         //8377610
     });
 }
-(0, monitor_1.monitor)();
+// monitor();
+(0, monitor_1.calculatepositon)("USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA", "CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn");
 // temp();
 bot.launch();
 console.log("Bot is running...");
