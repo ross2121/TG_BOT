@@ -14,8 +14,10 @@ datasource db {
 }
 model User {
   id        String     @id @default(cuid())
-  telegram_id String
+  telegram_id String   @unique
   public_key  String
+  encrypted_private_key String?
+  encryption_iv String?
   positions Position[]
 }
 

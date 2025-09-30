@@ -17,7 +17,6 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const web3_js_1 = require("@solana/web3.js");
 const dlmm_sdk_1 = require("@saros-finance/dlmm-sdk");
 const client_1 = require("@prisma/client");
-const monitor_1 = require("./monitor");
 dotenv_1.default.config();
 const prisma = new client_1.PrismaClient();
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
@@ -129,17 +128,20 @@ function temp() {
         const activeBin = pairInfo.activeId;
         //         const pul= await   liquidityBookService.
         //    console.log(pul);
-        const poolPositions = yield liquidityBookService.getUserPositions({
-            payer: publickey,
-            pair: new web3_js_1.PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3")
-        });
-        console.log(poolPositions);
-        console.log(pairInfo);
+        //  const poolPositions = await liquidityBookService.getUserPositions({
+        //     payer:publickey,
+        //     pair: new PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3") 
+        // });
+        // console.log(poolPositions[0].position)
+        const result = yield liquidityBookService.getPositionAccount(new web3_js_1.PublicKey("GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY"));
+        console.log(result);
+        // console.log(poolPositions);
+        // console.log(pairInfo);
         //8377610
     });
 }
 // monitor();
-(0, monitor_1.calculatepositon)("USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA", "CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn");
-// temp();
-bot.launch();
+// calculatepositon("USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA","CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn",2,3);
+temp();
+// bot.launch();
 console.log("Bot is running...");

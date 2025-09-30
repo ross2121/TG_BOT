@@ -4,27 +4,93 @@ import { PublicKey } from "@solana/web3.js";
 import { LiquidityBookServices, MODE } from "@saros-finance/dlmm-sdk";
 import { PrismaClient, Status } from "@prisma/client";
 import { calculatepositon, monitor } from "./monitor";
+                                                                                                                                                                                                                                        import { generateWallet, encryptPrivateKey } from "./auth";
 dotenv.config();
 const prisma=new PrismaClient();
 const bot = new Telegraf(process.env.TELEGRAM_API || "");
 const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 const userStates = new Map();
 const DEFAULT_KEYBOARD = Markup.inlineKeyboard([
-    [Markup.button.callback("📊 Track Wallet Positions", "track_positions")]
+    [Markup.button.callback("📊 Track Wallet Positions", "track_positions")],
+    [Markup.button.callback("🔐 Create New Wallet", "create_wallet")]
 ]);
 type Postion={
  mint:string,
  Lower:string,
 Upper:string
 }
-bot.start(async (ctx) => {
+bot.start(async (ctx) => {                                                                                                              
     await ctx.reply("Welcome to the Saros DLMM Bot! 🚀\n\nChoose an option to begin:", {
         ...DEFAULT_KEYBOARD
-    });
+    });                                                                                                                                                                                                         
 });
 bot.action("track_positions", async (ctx) => {
     userStates.set(ctx.from.id, { step: 'awaiting_pool' });
     await ctx.reply("🏊 Please enter the pool address you want to analyze:");
+});
+
+bot.action("create_wallet", async (ctx) => {
+    try {
+        const userId = ctx.from.id;
+        
+        // Check if user already has a wallet
+        const existingUser = await prisma.user.findUnique({
+            where: { telegram_id: userId.toString() }
+        });
+        
+        if (existingUser && existingUser.encrypted_private_key) {
+            await ctx.reply(`⚠️ You already have a wallet!\n\n🔑 **Your Public Key:**\n\`${existingUser.public_key}\`\n\n⚠️ For security reasons, we cannot show your private key again. Make sure you saved it previously!`, 
+                { parse_mode: 'Markdown' });
+            return;
+        }
+        
+        // Generate new wallet
+        const wallet = generateWallet();
+        const { encrypted, iv } = encryptPrivateKey(wallet.secretKey);
+        
+        // Save to database
+        if (existingUser) {
+            // Update existing user with wallet
+            await prisma.user.update({
+                where: { telegram_id: userId.toString() },
+                data: {
+                    public_key: wallet.publicKey,
+                    encrypted_private_key: encrypted,
+                    encryption_iv: iv
+                }
+            });
+        } else {
+            // Create new user with wallet
+            await prisma.user.create({
+                data: {
+                    telegram_id: userId.toString(),
+                    public_key: wallet.publicKey,
+                    encrypted_private_key: encrypted,
+                    encryption_iv: iv
+                }
+            });
+        }
+        
+        // Convert secret key to base58 for display
+        const bs58 = require('bs58');
+        const privateKeyBase58 = bs58.encode(wallet.secretKey);
+        
+        await ctx.reply(
+            `✅ **Wallet Created Successfully!**\n\n` +
+            `🔑 **Public Key (Share this):**\n\`${wallet.publicKey}\`\n\n` +
+            `🔐 **Private Key (NEVER share this!):**\n\`${privateKeyBase58}\`\n\n` +
+            `⚠️ **IMPORTANT:**\n` +
+            `• Save your private key in a secure location\n` +
+            `• Never share it with anyone\n` +
+            `• This is the ONLY time we'll show your private key\n` +
+            `• You can import this wallet into Phantom, Solflare, etc.`,
+            { parse_mode: 'Markdown' }
+        );
+        
+    } catch (error) {
+        console.error("Error creating wallet:", error);
+        await ctx.reply("❌ An error occurred while creating your wallet. Please try again.");
+    }
 });
 bot.on("text", async (ctx) => {
     const userId = ctx.from.id;
@@ -119,18 +185,28 @@ async function temp(){
     // console.log(data);
     const pairInfo = await liquidityBookService.getPairAccount(new PublicKey("9P3N4QxjMumpTNNdvaNNskXu2t7VHMMXtePQB72kkSAk"));
             const activeBin = pairInfo.activeId;
+            
 //         const pul= await   liquidityBookService.
 //    console.log(pul);
-     const poolPositions = await liquidityBookService.getUserPositions({
-        payer:publickey,
-        pair: new PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3") 
-    });
-    console.log(poolPositions);
-    console.log(pairInfo);
+    //  const poolPositions = await liquidityBookService.getUserPositions({
+    //     payer:publickey,
+    //     pair: new PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3") 
+    // });
+    // console.log(poolPositions[0].position)
+    const result = await liquidityBookService.getPositionAccount(new PublicKey("GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY"));
+    console.log(result);
+    // console.log(poolPositions);
+    // console.log(pairInfo);
     //8377610
 }
 // monitor();
-calculatepositon("USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA","CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn");
-// temp();
-bot.launch();
+// Example usage:
+// calculatepositon(
+//     "GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY", // position address
+//     "Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3", // pair address
+//     "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA", // token A mint
+//     "CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn"  // token B mint
+// ).then(result => console.log(result));
+temp();
+// bot.launch();
 console.log("Bot is running...");

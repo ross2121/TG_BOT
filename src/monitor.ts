@@ -15,6 +15,7 @@ export const monitor = async () => {
                 rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
             },
         });
+
         const positions = await prisma.position.findMany({
             include: { user: { select: { telegram_id: true } } }
         });
@@ -111,14 +112,51 @@ export const PostionMonitor= async () => {
     },900000)
     
 }
-export const calculatepositon=async(tokenA:string,tokenB:string,amounta:number,amountb:number)=>{
-const response=await axios.get(`https://lite-api.jup.ag/price/v3?ids=${tokenA},${tokenB}`);
-const data = response.data;
-
-const tokenAPrice = data[tokenA]?.usdPrice;
-const tokenBPrice = data[tokenB]?.usdPrice;
-
-const price=(amounta*tokenAPrice)+(amountb*tokenBPrice);
-
-return price;
+export const calculatepositon=async(
+    positionAddress: string,
+    pairAddress: string,
+    tokenAMint: string,
+    tokenBMint: string
+)=>{
+    const liquidityBookService = new LiquidityBookServices({
+        mode: MODE.MAINNET,
+        options: {
+            rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+        },
+    });
+    
+    // Get the reserves (token amounts) for the position
+    const reserves = await liquidityBookService.getBinsReserveInformation({
+        position: new PublicKey(positionAddress),
+        pair: new PublicKey(pairAddress),
+        payer: new PublicKey("11111111111111111111111111111111") // Dummy payer for read-only
+    });
+    
+    // Sum up all reserves across all bins
+    let totalTokenA = 0;
+    let totalTokenB = 0;
+    
+    reserves.forEach(reserve => {
+        totalTokenA += reserve.reserveX;
+        totalTokenB += parseInt(reserve.reserveY)||0;
+    });
+    
+    console.log(`Token A amount: ${totalTokenA}`);
+    console.log(`Token B amount: ${totalTokenB}`);
+    
+    // Get USD prices from Jupiter
+    const response = await axios.get(`https://lite-api.jup.ag/price/v3?ids=${tokenAMint},${tokenBMint}`);
+    const data = response.data;
+    
+    const tokenAPrice = data[tokenAMint]?.usdPrice || 0;
+    const tokenBPrice = data[tokenBMint]?.usdPrice || 0;
+    
+    // Calculate total USD value
+    const totalValue = (totalTokenA * tokenAPrice) + (totalTokenB * tokenBPrice);
+    
+    return {
+        tokenA: { amount: totalTokenA, price: tokenAPrice, value: totalTokenA * tokenAPrice },
+        tokenB: { amount: totalTokenB, price: tokenBPrice, value: totalTokenB * tokenBPrice },
+        totalValue
+    };
 }
