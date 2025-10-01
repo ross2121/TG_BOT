@@ -16,7 +16,8 @@ const userStates = new Map();
 const DEFAULT_KEYBOARD = Markup.inlineKeyboard([
     [Markup.button.callback("📊 Track Wallet Positions", "track_positions")],
     [Markup.button.callback("🔐 Create New Wallet", "create_wallet")],
-    [Markup.button.callback("🔄 Swap Tokens", "swap_tokens")]
+    [Markup.button.callback("🔄 Swap Tokens", "swap_tokens")],
+    [Markup.button.callback("💼 Manage Wallet", "manage_wallet")]
 ]);
 type Postion={
  mint:string,
@@ -27,6 +28,12 @@ bot.start(async (ctx) => {
     await ctx.reply("Welcome to the Saros DLMM Bot! 🚀\n\nChoose an option to begin:", {
         ...DEFAULT_KEYBOARD
     });                                                                                                                                                                                                         
+});
+
+bot.command("menu", async (ctx) => {
+    await ctx.reply("Main Menu:", {
+        ...DEFAULT_KEYBOARD
+    });
 });
 bot.action("track_positions", async (ctx) => {
     userStates.set(ctx.from.id, { step: 'awaiting_pool' });
@@ -99,6 +106,103 @@ bot.action("create_wallet", async (ctx) => {
         await ctx.reply("❌ An error occurred while creating your wallet. Please try again.");
     }
 });
+
+bot.action("manage_wallet", async (ctx) => {
+    try {
+        const userId = ctx.from.id;
+        
+        const existingUser = await prisma.user.findUnique({
+            where: { telegram_id: userId.toString() }
+        });
+        
+        if (!existingUser || !existingUser.encrypted_private_key) {
+            await ctx.reply(
+                "❌ You don't have a wallet yet!\n\n" +
+                "Click 'Create New Wallet' to get started.",
+                { ...DEFAULT_KEYBOARD }
+            );
+            return;
+        }
+        
+        // Show wallet info with management options
+        const managementKeyboard = Markup.inlineKeyboard([
+            [Markup.button.callback("🔴 Disconnect Wallet", "disconnect_wallet")],
+            [Markup.button.callback("◀️ Back to Menu", "back_to_menu")]
+        ]);
+        
+        await ctx.reply(
+            `💼 **Wallet Management**\n\n` +
+            `🔑 **Your Public Key:**\n\`${existingUser.public_key}\`\n\n` +
+            `⚠️ **Warning:** Disconnecting your wallet will remove it from this bot. ` +
+            `Make sure you have saved your private key!`,
+            { parse_mode: 'Markdown', ...managementKeyboard }
+        );
+        
+    } catch (error) {
+        console.error("Error managing wallet:", error);
+        await ctx.reply("❌ An error occurred. Please try again.");
+    }
+});
+
+bot.action("disconnect_wallet", async (ctx) => {
+    const confirmKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Yes, Disconnect", "confirm_disconnect")],
+        [Markup.button.callback("❌ Cancel", "cancel_disconnect")]
+    ]);
+    
+    await ctx.reply(
+        `⚠️ **Confirm Wallet Disconnection**\n\n` +
+        `Are you sure you want to disconnect your wallet?\n\n` +
+        `⚠️ This will:\n` +
+        `• Remove your wallet from this bot\n` +
+        `• Delete all your tracked positions\n` +
+        `• Stop monitoring alerts\n\n` +
+        `❗ Make sure you have backed up your private key!\n` +
+        `We cannot recover it for you.`,
+        { parse_mode: 'Markdown', ...confirmKeyboard }
+    );
+});
+
+bot.action("confirm_disconnect", async (ctx) => {
+    try {
+        const userId = ctx.from.id;
+        
+        // Delete all positions first
+        await prisma.position.deleteMany({
+            where: { user: { telegram_id: userId.toString() } }
+        });
+        
+        // Delete the user and wallet
+        await prisma.user.delete({
+            where: { telegram_id: userId.toString() }
+        });
+        
+        await ctx.reply(
+            `✅ **Wallet Disconnected Successfully**\n\n` +
+            `Your wallet and all positions have been removed from the bot.\n\n` +
+            `You can create a new wallet or reconnect anytime!`,
+            { ...DEFAULT_KEYBOARD }
+        );
+        
+    } catch (error) {
+        console.error("Error disconnecting wallet:", error);
+        await ctx.reply("❌ An error occurred while disconnecting. Please try again.");
+    }
+});
+
+bot.action("cancel_disconnect", async (ctx) => {
+    await ctx.reply(
+        "✅ Cancelled. Your wallet is still connected.",
+        { ...DEFAULT_KEYBOARD }
+    );
+});
+
+bot.action("back_to_menu", async (ctx) => {
+    await ctx.reply(
+        "Welcome back! Choose an option:",
+        { ...DEFAULT_KEYBOARD }
+    );
+});
 bot.on("text", async (ctx) => {
     const userId = ctx.from.id;
     const message = ctx.message.text;
@@ -169,15 +273,39 @@ bot.on("text", async (ctx) => {
                 response += ` •  *Lower Bin ID:* ${position.lowerBinId}\n`;
                 response += ` •  *Upper Bin ID:* ${position.upperBinId}\n\n`;
             });
-            await prisma.user.create({
-                data: {
-                    telegram_id: userId.toString(),
-                    public_key: walletAddress,
-                    positions: {
-                        create: positionData
+            
+            // Check if user exists
+            const existingUser = await prisma.user.findUnique({
+                where: { telegram_id: userId.toString() }
+            });
+            
+            if (existingUser) {
+                // User exists - delete old positions and add new ones
+                await prisma.position.deleteMany({
+                    where: { 
+                        userId: existingUser.id,
+                        Market: poolAddress 
                     }
-                }
-            })
+                });
+                
+                await prisma.position.createMany({
+                    data: positionData.map(pos => ({
+                        ...pos,
+                        userId: existingUser.id
+                    }))
+                });
+            } else {
+                // Create new user with positions
+                await prisma.user.create({
+                    data: {
+                        telegram_id: userId.toString(),
+                        public_key: walletAddress,
+                        positions: {
+                            create: positionData
+                        }
+                    }
+                });
+            }
             await ctx.reply(response, { parse_mode: 'Markdown' });
             userStates.delete(userId); // Clean up state after completion
         }
@@ -201,13 +329,13 @@ async function temp(){
         const pool=await liquidityBookService.fetchPoolAddresses();
         // console.log(pool);    
 //         const pul= await   liquidityBookService.
-//    console.log(pul);
+//    console.log(pul);                                                                                                                                                                                                                                                                         
      const pairAddress = new PublicKey("8vZHTVMdYvcPFUoHBEbcFyfSKnjWtvbNgYpXg1aiC2uS");
-     const poolPositions = await liquidityBookService.getUserPositions({
-        payer:publickey,
-        pair: pairAddress
-    });
-    
+                                                                                                                                                                                                                                                                                                                                                                    const poolPositions = await liquidityBookService.getUserPositions({
+                                                                                                                                                                                                                                                                                                                                                                        payer:publickey,
+                                                                                                                                                                                                                                                                                                                                                                        pair: pairAddress
+                                                                                                                                                                                                                                                                                                                                                                    });
+                                                                                                                                                                                                                                                                                                                                                                                                                    
     console.log(poolPositions[0])
     
     // Get actual token amounts from the position
@@ -271,7 +399,7 @@ async function temp(){
     // console.log(pairInfo);
     //8377610
 }
-// monitor();
+monitor();
 // Example usage:
 // calculatepositon(
 //     "GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY", // position address

@@ -4,17 +4,19 @@ import { PublicKey } from "@solana/web3.js";
 import axios from "axios";
 import { Telegraf } from "telegraf";
 
+// Reuse singletons to avoid opening too many DB and network connections
+const prisma = new PrismaClient();
+const bot = new Telegraf(process.env.TELEGRAM_API || "");
+const liquidityBookService = new LiquidityBookServices({
+    mode: MODE.MAINNET,
+    options: {
+        rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+    },
+});
+
 export const monitor = async () => {
     setInterval(async()=>{
-        const prisma = new PrismaClient();
         console.log("Starting position monitor...");
-        const bot = new Telegraf(process.env.TELEGRAM_API || "");
-        const liquidityBookService = new LiquidityBookServices({
-            mode: MODE.MAINNET,
-            options: {
-                rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
-            },
-        });
 
         const positions = await prisma.position.findMany({
             include: { user: { select: { telegram_id: true, public_key: true } } }
@@ -51,8 +53,6 @@ export const monitor = async () => {
                     console.log(`✅ Position ${position.mint} is in range`);
                 }
                 
-                // Calculate current position value
-                const positionAddress = position.mint;
                 const userPublicKey = position.user?.public_key;
                 
                 if (!userPublicKey) {
@@ -60,13 +60,31 @@ export const monitor = async () => {
                     continue;
                 }
                 
+                // Get all user positions for this pair to find the actual position account
+                const poolPositions = await liquidityBookService.getUserPositions({
+                    payer: new PublicKey(userPublicKey),
+                    pair: new PublicKey(marketAddress)
+                });
+                
+                // Find the matching position by mint address
+                const matchingPosition = poolPositions.find(
+                    p => p.positionMint.toString() === position.mint
+                );
+                
+                if (!matchingPosition) {
+                    console.log(`Position ${position.mint} not found in current user positions`);
+                    continue;
+                }
+                
+                // Use the actual position account address, not the mint
+                const positionAddress = new PublicKey(matchingPosition.position);
+                
                 // Get token amounts from reserves
                 const reserveInfo = await liquidityBookService.getBinsReserveInformation({
-                    position: new PublicKey(positionAddress),
+                    position: positionAddress,
                     pair: new PublicKey(marketAddress),
                     payer: new PublicKey(userPublicKey)
                 });
-                
                 // Calculate total token amounts
                 let totalTokenX = 0;
                 let totalTokenY = 0;
@@ -81,7 +99,7 @@ export const monitor = async () => {
                 const tokenYMint = pairInfo.tokenMintY.toString();
                 
                 const priceResponse = await axios.get(
-                    `https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`
+                    `https://api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`
                 );
                 
                 const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
@@ -151,7 +169,7 @@ export const monitor = async () => {
         }
         
         console.log("Monitor check complete");
-    },900000)
+    },9000)
     
 }
 

@@ -18,18 +18,19 @@ const dlmm_sdk_1 = require("@saros-finance/dlmm-sdk");
 const web3_js_1 = require("@solana/web3.js");
 const axios_1 = __importDefault(require("axios"));
 const telegraf_1 = require("telegraf");
+// Reuse singletons to avoid opening too many DB and network connections
+const prisma = new client_1.PrismaClient();
+const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
+const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
+    mode: dlmm_sdk_1.MODE.MAINNET,
+    options: {
+        rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+    },
+});
 const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
     setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
         var _a, _b, _c, _d, _e, _f, _g;
-        const prisma = new client_1.PrismaClient();
         console.log("Starting position monitor...");
-        const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
-        const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
-            mode: dlmm_sdk_1.MODE.MAINNET,
-            options: {
-                rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
-            },
-        });
         const positions = yield prisma.position.findMany({
             include: { user: { select: { telegram_id: true, public_key: true } } }
         });
@@ -64,16 +65,27 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                 else {
                     console.log(`✅ Position ${position.mint} is in range`);
                 }
-                // Calculate current position value
-                const positionAddress = position.mint;
                 const userPublicKey = (_b = position.user) === null || _b === void 0 ? void 0 : _b.public_key;
                 if (!userPublicKey) {
                     console.log(`No public key found for position ${position.mint}`);
                     continue;
                 }
+                // Get all user positions for this pair to find the actual position account
+                const poolPositions = yield liquidityBookService.getUserPositions({
+                    payer: new web3_js_1.PublicKey(userPublicKey),
+                    pair: new web3_js_1.PublicKey(marketAddress)
+                });
+                // Find the matching position by mint address
+                const matchingPosition = poolPositions.find(p => p.positionMint.toString() === position.mint);
+                if (!matchingPosition) {
+                    console.log(`Position ${position.mint} not found in current user positions`);
+                    continue;
+                }
+                // Use the actual position account address, not the mint
+                const positionAddress = new web3_js_1.PublicKey(matchingPosition.position);
                 // Get token amounts from reserves
                 const reserveInfo = yield liquidityBookService.getBinsReserveInformation({
-                    position: new web3_js_1.PublicKey(positionAddress),
+                    position: positionAddress,
                     pair: new web3_js_1.PublicKey(marketAddress),
                     payer: new web3_js_1.PublicKey(userPublicKey)
                 });
@@ -87,7 +99,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                 // Get token prices from Jupiter API
                 const tokenXMint = pairInfo.tokenMintX.toString();
                 const tokenYMint = pairInfo.tokenMintY.toString();
-                const priceResponse = yield axios_1.default.get(`https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`);
+                const priceResponse = yield axios_1.default.get(`https://api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`);
                 const tokenXPrice = ((_d = (_c = priceResponse.data.data) === null || _c === void 0 ? void 0 : _c[tokenXMint]) === null || _d === void 0 ? void 0 : _d.price) || 0;
                 const tokenYPrice = ((_f = (_e = priceResponse.data.data) === null || _e === void 0 ? void 0 : _e[tokenYMint]) === null || _f === void 0 ? void 0 : _f.price) || 0;
                 // Get token decimals from pair info
@@ -145,7 +157,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
             }
         }
         console.log("Monitor check complete");
-    }), 900000);
+    }), 9000);
 });
 exports.monitor = monitor;
 const calculatepositon = (positionAddress, pairAddress, tokenAMint, tokenBMint) => __awaiter(void 0, void 0, void 0, function* () {
