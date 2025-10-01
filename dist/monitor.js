@@ -124,28 +124,40 @@ const PostionMonitor = () => __awaiter(void 0, void 0, void 0, function* () {
     }), 900000);
 });
 exports.PostionMonitor = PostionMonitor;
-const calculatepositon = (tokenA, tokenB, amounta, amountb) => __awaiter(void 0, void 0, void 0, function* () {
+const calculatepositon = (positionAddress, pairAddress, tokenAMint, tokenBMint) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
-    const response = yield axios_1.default.get(`https://lite-api.jup.ag/price/v3?ids=${tokenA},${tokenB}`);
-    const data = response.data;
     const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
         mode: dlmm_sdk_1.MODE.MAINNET,
+        options: {
+            rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+        },
     });
-    // Note: You need to use the 'position' address, not 'positionMint'
-    // First get user positions, then use the 'position' field from the result
-    const userPositions = yield liquidityBookService.getUserPositions({
-        payer: new web3_js_1.PublicKey("HvFfbbDXggmz7UfE21rdL8x6RBX5RpEPvw7kUJVkCk9A"), // Replace with actual wallet
-        pair: new web3_js_1.PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3") // Replace with actual pair
+    // Get the reserves (token amounts) for the position
+    const reserves = yield liquidityBookService.getBinsReserveInformation({
+        position: new web3_js_1.PublicKey(positionAddress),
+        pair: new web3_js_1.PublicKey(pairAddress),
+        payer: new web3_js_1.PublicKey("11111111111111111111111111111111") // Dummy payer for read-only
     });
-    if (userPositions.length > 0) {
-        const positionAddress = userPositions[0].position; // This is the correct address
-        const result = yield liquidityBookService.getPositionAccount(new web3_js_1.PublicKey(positionAddress));
-        console.log("Position account data:", result);
-    }
-    //9nWgR32r8Xcw773CqMYwngqE3h1Yt2q8K1fK8rJn1YqR
-    const tokenAPrice = (_a = data[tokenA]) === null || _a === void 0 ? void 0 : _a.usdPrice;
-    const tokenBPrice = (_b = data[tokenB]) === null || _b === void 0 ? void 0 : _b.usdPrice;
-    const price = (amounta * tokenAPrice) + (amountb * tokenBPrice);
-    return price;
+    // Sum up all reserves across all bins
+    let totalTokenA = 0;
+    let totalTokenB = 0;
+    reserves.forEach(reserve => {
+        totalTokenA += Number(reserve.reserveX) || 0;
+        totalTokenB += Number(reserve.reserveY) || 0;
+    });
+    console.log(`Token A amount: ${totalTokenA}`);
+    console.log(`Token B amount: ${totalTokenB}`);
+    // Get USD prices from Jupiter
+    const response = yield axios_1.default.get(`https://lite-api.jup.ag/price/v3?ids=${tokenAMint},${tokenBMint}`);
+    const data = response.data;
+    const tokenAPrice = ((_a = data[tokenAMint]) === null || _a === void 0 ? void 0 : _a.usdPrice) || 0;
+    const tokenBPrice = ((_b = data[tokenBMint]) === null || _b === void 0 ? void 0 : _b.usdPrice) || 0;
+    // Calculate total USD value
+    const totalValue = (totalTokenA * tokenAPrice) + (totalTokenB * tokenBPrice);
+    return {
+        tokenA: { amount: totalTokenA, price: tokenAPrice, value: totalTokenA * tokenAPrice },
+        tokenB: { amount: totalTokenB, price: tokenBPrice, value: totalTokenB * tokenBPrice },
+        totalValue
+    };
 });
 exports.calculatepositon = calculatepositon;

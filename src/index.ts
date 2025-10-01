@@ -1,10 +1,13 @@
 import { Telegraf, Markup } from "telegraf";
 import dotenv from "dotenv";
 import { PublicKey } from "@solana/web3.js";
-import { LiquidityBookServices, MODE } from "@saros-finance/dlmm-sdk";
+import { LiquidityBookServices, MODE, PoolMetadata } from "@saros-finance/dlmm-sdk";
 import { PrismaClient, Status } from "@prisma/client";
 import { calculatepositon, monitor } from "./monitor";
-                                                                                                                                                                                                                                        import { generateWallet, encryptPrivateKey } from "./auth";
+import { generateWallet, encryptPrivateKey } from "./auth";
+import { handleSwapCommand, handleSwapFlow } from "./swapHandler";
+import bs58 from "bs58";
+import axios from "axios";
 dotenv.config();
 const prisma=new PrismaClient();
 const bot = new Telegraf(process.env.TELEGRAM_API || "");
@@ -12,7 +15,8 @@ const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 const userStates = new Map();
 const DEFAULT_KEYBOARD = Markup.inlineKeyboard([
     [Markup.button.callback("📊 Track Wallet Positions", "track_positions")],
-    [Markup.button.callback("🔐 Create New Wallet", "create_wallet")]
+    [Markup.button.callback("🔐 Create New Wallet", "create_wallet")],
+    [Markup.button.callback("🔄 Swap Tokens", "swap_tokens")]
 ]);
 type Postion={
  mint:string,
@@ -27,6 +31,10 @@ bot.start(async (ctx) => {
 bot.action("track_positions", async (ctx) => {
     userStates.set(ctx.from.id, { step: 'awaiting_pool' });
     await ctx.reply("🏊 Please enter the pool address you want to analyze:");
+});
+
+bot.action("swap_tokens", async (ctx) => {
+    await handleSwapCommand(ctx, userStates);
 });
 
 bot.action("create_wallet", async (ctx) => {
@@ -72,7 +80,6 @@ bot.action("create_wallet", async (ctx) => {
         }
         
         // Convert secret key to base58 for display
-        const bs58 = require('bs58');
         const privateKeyBase58 = bs58.encode(wallet.secretKey);
         
         await ctx.reply(
@@ -100,6 +107,12 @@ bot.on("text", async (ctx) => {
         await ctx.reply("Please use the menu buttons to start! 👆", {
             ...DEFAULT_KEYBOARD
         });
+        return;
+    }
+    
+    // Handle swap flow
+    if (userState.swapState) {
+        await handleSwapFlow(ctx, message, userId, userStates);
         return;
     }
      try {
@@ -185,7 +198,8 @@ async function temp(){
     // console.log(data);
     const pairInfo = await liquidityBookService.getPairAccount(new PublicKey("9P3N4QxjMumpTNNdvaNNskXu2t7VHMMXtePQB72kkSAk"));
             const activeBin = pairInfo.activeId;
-            
+        const pool=await liquidityBookService.fetchPoolAddresses();
+        // console.log(pool);    
 //         const pul= await   liquidityBookService.
 //    console.log(pul);
     //  const poolPositions = await liquidityBookService.getUserPositions({
@@ -194,6 +208,17 @@ async function temp(){
     // });
     // console.log(poolPositions[0].position)
     const result = await liquidityBookService.getPositionAccount(new PublicKey("GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY"));
+    const poolinfor:PoolMetadata=await liquidityBookService.fetchPoolMetadata(pool[1]);  
+       const poolionf=await liquidityBookService.getPairAccount(new PublicKey(poolinfor.poolAddress));
+       console.log(liquidityBookService.getDexName());
+       console.log(poolionf.tokenMintX);
+       console.log(poolionf.tokenMintX);
+    const response = await axios.get(`https://lite-api.jup.ag/price/v3?ids=${poolinfor.poolAddress}`);
+    console.log(response.data);
+// const tokenData = response.data.data[poolionf.tokenMintX];
+// console.log(tokenData.symbol); // Token symbol
+// console.log(tokenData.name);
+
     console.log(result);
     // console.log(poolPositions);
     // console.log(pairInfo);
@@ -208,5 +233,5 @@ async function temp(){
 //     "CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn"  // token B mint
 // ).then(result => console.log(result));
 temp();
-// bot.launch();
+bot.launch();
 console.log("Bot is running...");

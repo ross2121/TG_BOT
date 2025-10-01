@@ -137,8 +137,8 @@ export const calculatepositon=async(
     let totalTokenB = 0;
     
     reserves.forEach(reserve => {
-        totalTokenA += reserve.reserveX;
-        totalTokenB += parseInt(reserve.reserveY)||0;
+        totalTokenA += Number(reserve.reserveX) || 0;
+        totalTokenB += Number(reserve.reserveY) || 0;
     });
     
     console.log(`Token A amount: ${totalTokenA}`);
