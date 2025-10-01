@@ -17,7 +17,7 @@ export const monitor = async () => {
         });
 
         const positions = await prisma.position.findMany({
-            include: { user: { select: { telegram_id: true } } }
+            include: { user: { select: { telegram_id: true, public_key: true } } }
         });
         console.log(`Found ${positions.length} positions to monitor`)
         for (let i = 0; i < positions.length; i++) {
@@ -34,7 +34,9 @@ export const monitor = async () => {
                 
                 console.log(`Active bin: ${activeBin}, Position range: ${lowerBinId} - ${upperBinId}`);
                 
-                if (activeBin < lowerBinId || activeBin > upperBinId) {
+                // Check if position is out of range
+                const isOutOfRange = activeBin < lowerBinId || activeBin > upperBinId;
+                if (isOutOfRange) {
                     console.log(`⚠️  Position ${position.mint} is out of range!`);
                     const chatId = position.user?.telegram_id;
                     if (chatId) {
@@ -47,6 +49,100 @@ export const monitor = async () => {
                     }
                 } else {
                     console.log(`✅ Position ${position.mint} is in range`);
+                }
+                
+                // Calculate current position value
+                const positionAddress = position.mint;
+                const userPublicKey = position.user?.public_key;
+                
+                if (!userPublicKey) {
+                    console.log(`No public key found for position ${position.mint}`);
+                    continue;
+                }
+                
+                // Get token amounts from reserves
+                const reserveInfo = await liquidityBookService.getBinsReserveInformation({
+                    position: new PublicKey(positionAddress),
+                    pair: new PublicKey(marketAddress),
+                    payer: new PublicKey(userPublicKey)
+                });
+                
+                // Calculate total token amounts
+                let totalTokenX = 0;
+                let totalTokenY = 0;
+                
+                reserveInfo.forEach(bin => {
+                    totalTokenX += Number(bin.reserveX);
+                    totalTokenY += Number(bin.reserveY);
+                });
+                
+                // Get token prices from Jupiter API
+                const tokenXMint = pairInfo.tokenMintX.toString();
+                const tokenYMint = pairInfo.tokenMintY.toString();
+                
+                const priceResponse = await axios.get(
+                    `https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`
+                );
+                
+                const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
+                const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;
+                
+                // Get token decimals from pair info
+                const poolMetadata = await liquidityBookService.fetchPoolMetadata(marketAddress);
+                const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
+                const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
+                
+                // Adjust for decimals
+                const adjustedTokenX = totalTokenX / Math.pow(10, tokenXDecimals);
+                const adjustedTokenY = totalTokenY / Math.pow(10, tokenYDecimals);
+                
+                // Calculate total USD value
+                const currentValue = (adjustedTokenX * tokenXPrice) + (adjustedTokenY * tokenYPrice);
+                
+                console.log(`Position value: $${currentValue.toFixed(2)} (Token X: ${adjustedTokenX.toFixed(4)}, Token Y: ${adjustedTokenY.toFixed(4)})`);
+                
+                // Check if value changed by 10% or more
+                const previousValue = position.Previous;
+                
+                if (previousValue > 0) {
+                    const percentageChange = ((currentValue - previousValue) / previousValue) * 100;
+                    
+                    if (Math.abs(percentageChange) >= 10) {
+                        console.log(`🚨 Value change detected: ${percentageChange.toFixed(2)}%`);
+                        
+                        const chatId = position.user?.telegram_id;
+                        if (chatId) {
+                            const emoji = percentageChange > 0 ? "📈" : "📉";
+                            const direction = percentageChange > 0 ? "increased" : "decreased";
+                            
+                            const text = `${emoji} Position Value Alert!\n\n` +
+                                `Your position has ${direction} by ${Math.abs(percentageChange).toFixed(2)}%\n\n` +
+                                `• Position: ${position.mint}\n` +
+                                `• Previous Value: $${previousValue.toFixed(2)}\n` +
+                                `• Current Value: $${currentValue.toFixed(2)}\n` +
+                                `• Token X: ${adjustedTokenX.toFixed(4)} @ $${tokenXPrice.toFixed(4)}\n` +
+                                `• Token Y: ${adjustedTokenY.toFixed(4)} @ $${tokenYPrice.toFixed(4)}`;
+                            
+                            try {
+                                await bot.telegram.sendMessage(chatId, text);
+                            } catch (error) {
+                                console.error(`Failed to send alert to ${chatId}:`, error);
+                            }
+                        }
+                        
+                        // Update the Previous value in database
+                        await prisma.position.update({
+                            where: { id: position.id },
+                            data: { Previous: currentValue }
+                        });
+                    }
+                } else {
+                    // First time monitoring, just set the current value
+                    console.log(`Setting initial value: $${currentValue.toFixed(2)}`);
+                    await prisma.position.update({
+                        where: { id: position.id },
+                        data: { Previous: currentValue }
+                    });
                 }
                 
             } catch (error) {
@@ -59,59 +155,6 @@ export const monitor = async () => {
     
 }
 
-export const PostionMonitor= async () => {
-    setInterval(async()=>{
-        const prisma = new PrismaClient();
-        console.log("Starting position monitor...");
-        const bot = new Telegraf(process.env.TELEGRAM_API || "");
-        const liquidityBookService = new LiquidityBookServices({
-            mode: MODE.MAINNET,
-            options: {
-                rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
-            },
-        });
-        const positions = await prisma.position.findMany({
-            include: { user: { select: { telegram_id: true } } }
-        });
-        console.log(`Found ${positions.length} positions to monitor`)
-        for (let i = 0; i < positions.length; i++) {
-            const position = positions[i];
-            const marketAddress = position.Market;
-            try {
-                console.log(`Checking position ${i + 1}: Market ${marketAddress}`);
-            
-                const pairInfo = await liquidityBookService.getPairAccount(new PublicKey(marketAddress));
-                const activeBin = pairInfo.activeId;
-                
-                const lowerBinId = parseInt(position.lowerId);
-                const upperBinId = parseInt(position.upperId);
-                
-                console.log(`Active bin: ${activeBin}, Position range: ${lowerBinId} - ${upperBinId}`);
-                
-                if (activeBin < lowerBinId || activeBin > upperBinId) {
-                    console.log(`⚠️  Position ${position.mint} is out of range!`);
-                    const chatId = position.user?.telegram_id;
-                    if (chatId) {
-                        const text = `⚠️ Position out of range\n\n` +
-                            `• Market: ${marketAddress}\n` +
-                            `• Position Mint: ${position.mint}\n` +
-                            `• Active Bin: ${activeBin}\n` +
-                            `• Range: ${lowerBinId} - ${upperBinId}`;
-                        try { await bot.telegram.sendMessage(chatId, text); } catch {}
-                    }
-                } else {
-                    console.log(`✅ Position ${position.mint} is in range`);
-                }
-                
-            } catch (error) {
-                console.error(`Error checking position ${position.mint}:`, error);
-            }
-        }
-        
-        console.log("Monitor check complete");
-    },900000)
-    
-}
 export const calculatepositon=async(
     positionAddress: string,
     pairAddress: string,

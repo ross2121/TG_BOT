@@ -20,7 +20,6 @@ const client_1 = require("@prisma/client");
 const auth_1 = require("./auth");
 const swapHandler_1 = require("./swapHandler");
 const bs58_1 = __importDefault(require("bs58"));
-const axios_1 = __importDefault(require("axios"));
 dotenv_1.default.config();
 const prisma = new client_1.PrismaClient();
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
@@ -188,7 +187,7 @@ function temp() {
         const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
             mode: dlmm_sdk_1.MODE.MAINNET,
         });
-        const publickey = new web3_js_1.PublicKey("HvFfbbDXggmz7UfE21rdL8x6RBX5RpEPvw7kUJVkCk9A");
+        const publickey = new web3_js_1.PublicKey("2sZfUCe5q55K1MjYP7HYRmU2Br6MS7DATtzSqgbZGtaN");
         // const data= await liquidityBookService.getPositionAccount(publickey);
         // console.log(data);
         const pairInfo = yield liquidityBookService.getPairAccount(new web3_js_1.PublicKey("9P3N4QxjMumpTNNdvaNNskXu2t7VHMMXtePQB72kkSAk"));
@@ -197,23 +196,64 @@ function temp() {
         // console.log(pool);    
         //         const pul= await   liquidityBookService.
         //    console.log(pul);
-        //  const poolPositions = await liquidityBookService.getUserPositions({
-        //     payer:publickey,
-        //     pair: new PublicKey("Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3") 
-        // });
-        // console.log(poolPositions[0].position)
-        const result = yield liquidityBookService.getPositionAccount(new web3_js_1.PublicKey("GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY"));
-        const poolinfor = yield liquidityBookService.fetchPoolMetadata(pool[1]);
-        const poolionf = yield liquidityBookService.getPairAccount(new web3_js_1.PublicKey(poolinfor.poolAddress));
-        console.log(liquidityBookService.getDexName());
-        console.log(poolionf.tokenMintX);
-        console.log(poolionf.tokenMintX);
-        const response = yield axios_1.default.get(`https://lite-api.jup.ag/price/v3?ids=${poolinfor.poolAddress}`);
-        console.log(response.data);
+        const pairAddress = new web3_js_1.PublicKey("8vZHTVMdYvcPFUoHBEbcFyfSKnjWtvbNgYpXg1aiC2uS");
+        const poolPositions = yield liquidityBookService.getUserPositions({
+            payer: publickey,
+            pair: pairAddress
+        });
+        console.log(poolPositions[0]);
+        // Get actual token amounts from the position
+        if (poolPositions.length > 0) {
+            // Get the current active bin of the pool
+            const currentPairInfo = yield liquidityBookService.getPairAccount(pairAddress);
+            const currentActiveBin = currentPairInfo.activeId;
+            const positionAddress = new web3_js_1.PublicKey(poolPositions[0].position);
+            const reserveInfo = yield liquidityBookService.getBinsReserveInformation({
+                position: positionAddress,
+                pair: pairAddress,
+                payer: publickey
+            });
+            console.log(reserveInfo);
+            // Calculate total token amounts across all bins
+            // let totalTokenX = 0;
+            // let totalTokenY = 0;
+            // reserveInfo.forEach(bin => {
+            //     totalTokenX += Number(bin.reserveX);
+            //     totalTokenY += Number(bin.reserveY);
+            // });
+            // console.log("\n=== Pool & Position Info ===");
+            // console.log("Current Active Bin ID:", currentActiveBin);
+            // console.log("Your Position Range: Bins", poolPositions[0].lowerBinId, "to", poolPositions[0].upperBinId);
+            // console.log("\nExplanation:");
+            // if (currentActiveBin < poolPositions[0].lowerBinId) {
+            //     console.log("✓ Current price is BELOW your position range");
+            //     console.log("✓ That's why you only have Token Y (quote token)");
+            //     console.log("✓ As price rises into your range, Token Y will convert to Token X");
+            // } else if (currentActiveBin > poolPositions[0].upperBinId) {
+            //     console.log("✓ Current price is ABOVE your position range");
+            //     console.log("✓ That's why you only have Token X (base token)");
+            //     console.log("✓ As price falls into your range, Token X will convert to Token Y");
+            // } else {
+            //     console.log("✓ Current price is WITHIN your position range");
+            //     console.log("✓ You should have both tokens in the active bin");
+            // }
+            // console.log("\n=== Position Token Amounts ===");
+            // console.log("Total Token X (Base):", totalTokenX);
+            // console.log("Total Token Y (Quote):", totalTokenY);
+            // console.log("\nDetailed bin reserves:", reserveInfo);
+        }
+        // const result = await liquidityBookService.getPositionAccount(new PublicKey("GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY"));
+        // const poolinfor:PoolMetadata=await liquidityBookService.fetchPoolMetadata(pool[1]);  
+        //    const poolionf=await liquidityBookService.getPairAccount(new PublicKey(poolinfor.poolAddress));
+        //    console.log(liquidityBookService.getDexName());
+        //    console.log(poolionf.tokenMintX);
+        //    console.log(poolionf.tokenMintX);
+        // const response = await axios.get(`https://lite-api.jup.ag/price/v3?ids=${poolinfor.poolAddress}`);
+        // console.log(response.data);
         // const tokenData = response.data.data[poolionf.tokenMintX];
         // console.log(tokenData.symbol); // Token symbol
         // console.log(tokenData.name);
-        console.log(result);
+        // console.log(result);
         // console.log(poolPositions);
         // console.log(pairInfo);
         //8377610

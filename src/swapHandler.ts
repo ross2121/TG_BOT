@@ -1,9 +1,10 @@
 import { Context } from "telegraf";
 import { PrismaClient } from "@prisma/client";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey,Connection } from "@solana/web3.js";
 import { executeSwap, getSwapQuote } from "./swap";
 import { decryptPrivateKey } from "./auth";
-import { LiquidityBookServices, MODE } from "@saros-finance/dlmm-sdk";
+import { LiquidityBookServices, MODE } from "@saros-finance/dlmm-sdk";;
+import { Metaplex, keypairIdentity } from "@metaplex-foundation/js";
 import axios from "axios";
 
 const prisma = new PrismaClient();
@@ -21,13 +22,19 @@ interface SwapState {
     quoteData?: any;
 }
 
+
+const connection = new Connection("https://api.mainnet-beta.solana.com");
+const metaplex = Metaplex.make(connection); 
+
 const getTokenInfo = async (mintAddress: string) => {
     try {
-        const response = await axios.get(`https://price.jup.ag/v4/price?ids=${mintAddress}`);
-        const data = response.data.data[mintAddress];
+        console.log(mintAddress);
+        const mintPublicKey = new PublicKey(mintAddress);
+    const nft = await metaplex.nfts().findByMint({ mintAddress: mintPublicKey });
+console.log(nft);
         return {
-            symbol: data?.symbol || 'UNKNOWN',
-            decimals: data?.decimals || 9
+            symbol: nft?.name|| 'UNKNOWN',
+            decimals:  9
         };
     } catch (error) {
         return { symbol: 'UNKNOWN', decimals: 9 };

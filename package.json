@@ -13,6 +13,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@metaplex-foundation/js": "^0.20.1",
     "@prisma/client": "6.16.2",
     "@saros-finance/dlmm-sdk": "^1.4.0",
     "@solana/web3.js": "^1.98.4",
