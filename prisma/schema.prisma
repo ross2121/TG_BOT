@@ -29,6 +29,14 @@ model Position {
   Market   String
   Status   Status
   Previous  Float @default(0.0)
+  
+  // IL calculation fields
+  initialTokenAAmount   Float @default(0.0)
+  initialTokenBAmount   Float @default(0.0)
+  initialTokenAPriceUSD Float @default(0.0)
+  initialTokenBPriceUSD Float @default(0.0)
+  lastILWarningPercent  Float @default(0.0)  // Track last warning to avoid spam
+  
   userId   String
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

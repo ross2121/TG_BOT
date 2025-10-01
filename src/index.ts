@@ -259,14 +259,59 @@ bot.on("text", async (ctx) => {
             response += `📍 **Pool Address:** \`${poolAddress}\`\n`;
             response += `👤 **Wallet:** \`${walletAddress}\`\n`;
             response += `📊 **Total Positions Found:** ${positions.length}\n\n`;
-            const positionData = positions.map(position => ({
-                mint: position.positionMint.toString(),
-                lowerId: position.lowerBinId.toString(),
-                upperId: position.upperBinId.toString(),
-                Previous:0.0,
-                Market:poolAddress,
-                Status: Status.Active
+            
+            // Get pair info for token prices and decimals
+            const pairInfo = await liquidityBookService.getPairAccount(new PublicKey(poolAddress));
+            const poolMetadata = await liquidityBookService.fetchPoolMetadata(poolAddress);
+            const tokenXMint = pairInfo.tokenMintX.toString();
+            const tokenYMint = pairInfo.tokenMintY.toString();
+            const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
+            const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
+            
+            // Fetch current token prices
+            const priceResponse = await axios.get(
+                `https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`
+            );
+            const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
+            const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;
+            
+            // Calculate initial values for each position
+            const positionData = await Promise.all(positions.map(async (position) => {
+                // Get reserve information for this position
+                const positionAddress = new PublicKey(position.position);
+                const reserveInfo = await liquidityBookService.getBinsReserveInformation({
+                    position: positionAddress,
+                    pair: new PublicKey(poolAddress),
+                    payer: new PublicKey(walletAddress)
+                });
+                
+                // Calculate total token amounts
+                let totalTokenX = 0;
+                let totalTokenY = 0;
+                reserveInfo.forEach(bin => {
+                    totalTokenX += Number(bin.reserveX);
+                    totalTokenY += Number(bin.reserveY);
+                });
+                
+                // Adjust for decimals
+                const adjustedTokenX = totalTokenX / Math.pow(10, tokenXDecimals);
+                const adjustedTokenY = totalTokenY / Math.pow(10, tokenYDecimals);
+                
+                return {
+                    mint: position.positionMint.toString(),
+                    lowerId: position.lowerBinId.toString(),
+                    upperId: position.upperBinId.toString(),
+                    Previous: 0.0,
+                    Market: poolAddress,
+                    Status: Status.Active,
+                    initialTokenAAmount: adjustedTokenX,
+                    initialTokenBAmount: adjustedTokenY,
+                    initialTokenAPriceUSD: tokenXPrice,
+                    initialTokenBPriceUSD: tokenYPrice,
+                    lastILWarningPercent: 0.0
+                };
             }));
+            
             positions.forEach((position, index) => {
                 response += `*Position ${index + 1}*\n`;
                 response += ` •  *Mint:* \`${position.positionMint}\`\n`;

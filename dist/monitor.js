@@ -29,7 +29,7 @@ const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
 });
 const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
     setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
         console.log("Starting position monitor...");
         const positions = yield prisma.position.findMany({
             include: { user: { select: { telegram_id: true, public_key: true } } }
@@ -59,7 +59,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                         try {
                             yield bot.telegram.sendMessage(chatId, text);
                         }
-                        catch (_h) { }
+                        catch (_k) { }
                     }
                 }
                 else {
@@ -151,13 +151,90 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                         data: { Previous: currentValue }
                     });
                 }
+                // ========== IMPERMANENT LOSS CALCULATION ==========
+                const IL_THRESHOLD = -5; // 5% loss threshold
+                const IL_NOTIFICATION_STEP = 2.5; // Only notify every 2.5% additional loss
+                // Get initial data from database
+                const { initialTokenAAmount, initialTokenBAmount, initialTokenAPriceUSD, initialTokenBPriceUSD, lastILWarningPercent } = position;
+                // Only calculate IL if we have initial data
+                if (initialTokenAAmount > 0 || initialTokenBAmount > 0) {
+                    // Calculate "Value if Held" (HODL value)
+                    const valueIfHeld = (initialTokenAAmount * tokenXPrice) + (initialTokenBAmount * tokenYPrice);
+                    // Calculate Impermanent Loss Percentage
+                    let impermanentLossPercentage = 0;
+                    if (valueIfHeld > 0) {
+                        impermanentLossPercentage = ((currentValue - valueIfHeld) / valueIfHeld) * 100;
+                    }
+                    console.log(`IL Check: Current: $${currentValue.toFixed(2)}, HODL: $${valueIfHeld.toFixed(2)}, IL: ${impermanentLossPercentage.toFixed(2)}%`);
+                    // Check if IL threshold is crossed
+                    if (impermanentLossPercentage <= IL_THRESHOLD) {
+                        // Check if this is a new warning or IL got significantly worse
+                        const ilDifference = Math.abs(impermanentLossPercentage - lastILWarningPercent);
+                        const shouldNotify = lastILWarningPercent === 0 || ilDifference >= IL_NOTIFICATION_STEP;
+                        if (shouldNotify) {
+                            console.log(`🚨 IL Warning: ${impermanentLossPercentage.toFixed(2)}%`);
+                            const chatId = (_h = position.user) === null || _h === void 0 ? void 0 : _h.telegram_id;
+                            if (chatId) {
+                                const emoji = impermanentLossPercentage < -10 ? "🔴" : "⚠️";
+                                const ilAbsolute = Math.abs(impermanentLossPercentage);
+                                const text = `${emoji} **Impermanent Loss Alert!**\n\n` +
+                                    `Your position has an IL of **${ilAbsolute.toFixed(2)}%** compared to holding.\n\n` +
+                                    `📊 **Position Details:**\n` +
+                                    `• Position: ${position.mint}\n` +
+                                    `• Current Value: $${currentValue.toFixed(2)}\n` +
+                                    `• HODL Value: $${valueIfHeld.toFixed(2)}\n` +
+                                    `• Difference: $${(currentValue - valueIfHeld).toFixed(2)}\n\n` +
+                                    `💰 **Current Position:**\n` +
+                                    `• Token X: ${adjustedTokenX.toFixed(4)} @ $${tokenXPrice.toFixed(4)}\n` +
+                                    `• Token Y: ${adjustedTokenY.toFixed(4)} @ $${tokenYPrice.toFixed(4)}\n\n` +
+                                    `🔒 **Initial (HODL):**\n` +
+                                    `• Token X: ${initialTokenAAmount.toFixed(4)} @ $${initialTokenAPriceUSD.toFixed(4)}\n` +
+                                    `• Token Y: ${initialTokenBAmount.toFixed(4)} @ $${initialTokenBPriceUSD.toFixed(4)}`;
+                                try {
+                                    yield bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                                }
+                                catch (error) {
+                                    console.error(`Failed to send IL alert to ${chatId}:`, error);
+                                }
+                            }
+                            // Update the last IL warning percentage
+                            yield prisma.position.update({
+                                where: { id: position.id },
+                                data: { lastILWarningPercent: impermanentLossPercentage }
+                            });
+                        }
+                    }
+                    else if (impermanentLossPercentage > 0 && lastILWarningPercent < 0) {
+                        // IL has recovered to positive (user is now ahead)
+                        console.log(`✅ IL Recovered: ${impermanentLossPercentage.toFixed(2)}%`);
+                        const chatId = (_j = position.user) === null || _j === void 0 ? void 0 : _j.telegram_id;
+                        if (chatId) {
+                            const text = `✅ **Good News!**\n\n` +
+                                `Your position IL has recovered!\n\n` +
+                                `• Current Value: $${currentValue.toFixed(2)}\n` +
+                                `• HODL Value: $${valueIfHeld.toFixed(2)}\n` +
+                                `• You're ahead by: ${impermanentLossPercentage.toFixed(2)}%`;
+                            try {
+                                yield bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+                            }
+                            catch (error) {
+                                console.error(`Failed to send IL recovery alert to ${chatId}:`, error);
+                            }
+                        }
+                        // Reset the warning tracker
+                        yield prisma.position.update({
+                            where: { id: position.id },
+                            data: { lastILWarningPercent: 0 }
+                        });
+                    }
+                }
             }
             catch (error) {
                 console.error(`Error checking position ${position.mint}:`, error);
             }
         }
         console.log("Monitor check complete");
-    }), 9000);
+    }), 900000); // 15 minutes
 });
 exports.monitor = monitor;
 const calculatepositon = (positionAddress, pairAddress, tokenAMint, tokenBMint) => __awaiter(void 0, void 0, void 0, function* () {

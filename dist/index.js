@@ -21,6 +21,7 @@ const monitor_1 = require("./monitor");
 const auth_1 = require("./auth");
 const swapHandler_1 = require("./swapHandler");
 const bs58_1 = __importDefault(require("bs58"));
+const axios_1 = __importDefault(require("axios"));
 dotenv_1.default.config();
 const prisma = new client_1.PrismaClient();
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
@@ -165,6 +166,7 @@ bot.action("back_to_menu", (ctx) => __awaiter(void 0, void 0, void 0, function* 
     yield ctx.reply("Welcome back! Choose an option:", Object.assign({}, DEFAULT_KEYBOARD));
 }));
 bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
+    var _a, _b, _c, _d;
     const userId = ctx.from.id;
     const message = ctx.message.text;
     const userState = userStates.get(userId);
@@ -220,14 +222,50 @@ bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
             response += `📍 **Pool Address:** \`${poolAddress}\`\n`;
             response += `👤 **Wallet:** \`${walletAddress}\`\n`;
             response += `📊 **Total Positions Found:** ${positions.length}\n\n`;
-            const positionData = positions.map(position => ({
-                mint: position.positionMint.toString(),
-                lowerId: position.lowerBinId.toString(),
-                upperId: position.upperBinId.toString(),
-                Previous: 0.0,
-                Market: poolAddress,
-                Status: client_1.Status.Active
-            }));
+            // Get pair info for token prices and decimals
+            const pairInfo = yield liquidityBookService.getPairAccount(new web3_js_1.PublicKey(poolAddress));
+            const poolMetadata = yield liquidityBookService.fetchPoolMetadata(poolAddress);
+            const tokenXMint = pairInfo.tokenMintX.toString();
+            const tokenYMint = pairInfo.tokenMintY.toString();
+            const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
+            const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
+            // Fetch current token prices
+            const priceResponse = yield axios_1.default.get(`https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`);
+            const tokenXPrice = ((_b = (_a = priceResponse.data.data) === null || _a === void 0 ? void 0 : _a[tokenXMint]) === null || _b === void 0 ? void 0 : _b.price) || 0;
+            const tokenYPrice = ((_d = (_c = priceResponse.data.data) === null || _c === void 0 ? void 0 : _c[tokenYMint]) === null || _d === void 0 ? void 0 : _d.price) || 0;
+            // Calculate initial values for each position
+            const positionData = yield Promise.all(positions.map((position) => __awaiter(void 0, void 0, void 0, function* () {
+                // Get reserve information for this position
+                const positionAddress = new web3_js_1.PublicKey(position.position);
+                const reserveInfo = yield liquidityBookService.getBinsReserveInformation({
+                    position: positionAddress,
+                    pair: new web3_js_1.PublicKey(poolAddress),
+                    payer: new web3_js_1.PublicKey(walletAddress)
+                });
+                // Calculate total token amounts
+                let totalTokenX = 0;
+                let totalTokenY = 0;
+                reserveInfo.forEach(bin => {
+                    totalTokenX += Number(bin.reserveX);
+                    totalTokenY += Number(bin.reserveY);
+                });
+                // Adjust for decimals
+                const adjustedTokenX = totalTokenX / Math.pow(10, tokenXDecimals);
+                const adjustedTokenY = totalTokenY / Math.pow(10, tokenYDecimals);
+                return {
+                    mint: position.positionMint.toString(),
+                    lowerId: position.lowerBinId.toString(),
+                    upperId: position.upperBinId.toString(),
+                    Previous: 0.0,
+                    Market: poolAddress,
+                    Status: client_1.Status.Active,
+                    initialTokenAAmount: adjustedTokenX,
+                    initialTokenBAmount: adjustedTokenY,
+                    initialTokenAPriceUSD: tokenXPrice,
+                    initialTokenBPriceUSD: tokenYPrice,
+                    lastILWarningPercent: 0.0
+                };
+            })));
             positions.forEach((position, index) => {
                 response += `*Position ${index + 1}*\n`;
                 response += ` •  *Mint:* \`${position.positionMint}\`\n`;
