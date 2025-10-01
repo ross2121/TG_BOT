@@ -270,7 +270,7 @@ bot.on("text", async (ctx) => {
             
             // Fetch current token prices
             const priceResponse = await axios.get(
-                `https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`
+                `https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`
             );
             const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
             const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;

@@ -29,12 +29,90 @@ const liquidityBookService = new dlmm_sdk_1.LiquidityBookServices({
 });
 const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
     setInterval(() => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p;
         console.log("Starting position monitor...");
         const positions = yield prisma.position.findMany({
-            include: { user: { select: { telegram_id: true, public_key: true } } }
+            include: { user: { select: { telegram_id: true, public_key: true, id: true } } }
         });
         console.log(`Found ${positions.length} positions to monitor`);
+        // --- Sync any new on-chain positions into DB per (user, market) ---
+        const uniqueCombos = new Map();
+        for (const p of positions) {
+            if (!((_a = p.user) === null || _a === void 0 ? void 0 : _a.public_key))
+                continue;
+            const key = `${p.user.id}:${p.Market}`;
+            if (!uniqueCombos.has(key)) {
+                uniqueCombos.set(key, { userId: p.user.id, wallet: p.user.public_key, market: p.Market });
+            }
+        }
+        for (const { userId, wallet, market } of uniqueCombos.values()) {
+            try {
+                // Fetch on-chain positions for this user+market
+                const onchainPositions = yield liquidityBookService.getUserPositions({
+                    payer: new web3_js_1.PublicKey(wallet),
+                    pair: new web3_js_1.PublicKey(market)
+                });
+                if (!(onchainPositions === null || onchainPositions === void 0 ? void 0 : onchainPositions.length))
+                    continue;
+                // Get pair info, decimals and current prices (for initial snapshot)
+                const pairInfo = yield liquidityBookService.getPairAccount(new web3_js_1.PublicKey(market));
+                const poolMetadata = yield liquidityBookService.fetchPoolMetadata(market);
+                const tokenXMint = pairInfo.tokenMintX.toString();
+                const tokenYMint = pairInfo.tokenMintY.toString();
+                const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
+                const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
+                const priceResponse = yield axios_1.default.get(`https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`);
+                const tokenXPrice = ((_c = (_b = priceResponse.data.data) === null || _b === void 0 ? void 0 : _b[tokenXMint]) === null || _c === void 0 ? void 0 : _c.price) || 0;
+                const tokenYPrice = ((_e = (_d = priceResponse.data.data) === null || _d === void 0 ? void 0 : _d[tokenYMint]) === null || _e === void 0 ? void 0 : _e.price) || 0;
+                // Get already stored mints for this user+market
+                const existing = yield prisma.position.findMany({
+                    where: { userId, Market: market },
+                    select: { mint: true }
+                });
+                const existingMints = new Set(existing.map(e => e.mint));
+                // For any new on-chain position not in DB, create it with initial snapshot
+                for (const ocp of onchainPositions) {
+                    const mintStr = ocp.positionMint.toString();
+                    if (existingMints.has(mintStr))
+                        continue;
+                    // Compute initial reserves
+                    const reserveInfo = yield liquidityBookService.getBinsReserveInformation({
+                        position: new web3_js_1.PublicKey(ocp.position),
+                        pair: new web3_js_1.PublicKey(market),
+                        payer: new web3_js_1.PublicKey(wallet)
+                    });
+                    let totalTokenX = 0;
+                    let totalTokenY = 0;
+                    reserveInfo.forEach(bin => {
+                        totalTokenX += Number(bin.reserveX);
+                        totalTokenY += Number(bin.reserveY);
+                    });
+                    const initA = totalTokenX / Math.pow(10, tokenXDecimals);
+                    const initB = totalTokenY / Math.pow(10, tokenYDecimals);
+                    yield prisma.position.create({
+                        data: {
+                            userId,
+                            mint: mintStr,
+                            lowerId: ocp.lowerBinId.toString(),
+                            upperId: ocp.upperBinId.toString(),
+                            Market: market,
+                            Status: 'Active',
+                            Previous: 0.0,
+                            initialTokenAAmount: initA,
+                            initialTokenBAmount: initB,
+                            initialTokenAPriceUSD: tokenXPrice,
+                            initialTokenBPriceUSD: tokenYPrice,
+                            lastILWarningPercent: 0.0
+                        }
+                    });
+                    console.log(`Synced new position ${mintStr} for user ${userId} in market ${market}`);
+                }
+            }
+            catch (e) {
+                console.error(`Sync error for user ${userId} market ${market}:`, e);
+            }
+        }
+        // --- Proceed with monitoring all stored positions ---
         for (let i = 0; i < positions.length; i++) {
             const position = positions[i];
             const marketAddress = position.Market;
@@ -49,7 +127,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                 const isOutOfRange = activeBin < lowerBinId || activeBin > upperBinId;
                 if (isOutOfRange) {
                     console.log(`⚠️  Position ${position.mint} is out of range!`);
-                    const chatId = (_a = position.user) === null || _a === void 0 ? void 0 : _a.telegram_id;
+                    const chatId = (_f = position.user) === null || _f === void 0 ? void 0 : _f.telegram_id;
                     if (chatId) {
                         const text = `⚠️ Position out of range\n\n` +
                             `• Market: ${marketAddress}\n` +
@@ -59,13 +137,13 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                         try {
                             yield bot.telegram.sendMessage(chatId, text);
                         }
-                        catch (_k) { }
+                        catch (_q) { }
                     }
                 }
                 else {
                     console.log(`✅ Position ${position.mint} is in range`);
                 }
-                const userPublicKey = (_b = position.user) === null || _b === void 0 ? void 0 : _b.public_key;
+                const userPublicKey = (_g = position.user) === null || _g === void 0 ? void 0 : _g.public_key;
                 if (!userPublicKey) {
                     console.log(`No public key found for position ${position.mint}`);
                     continue;
@@ -99,9 +177,9 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                 // Get token prices from Jupiter API
                 const tokenXMint = pairInfo.tokenMintX.toString();
                 const tokenYMint = pairInfo.tokenMintY.toString();
-                const priceResponse = yield axios_1.default.get(`https://api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`);
-                const tokenXPrice = ((_d = (_c = priceResponse.data.data) === null || _c === void 0 ? void 0 : _c[tokenXMint]) === null || _d === void 0 ? void 0 : _d.price) || 0;
-                const tokenYPrice = ((_f = (_e = priceResponse.data.data) === null || _e === void 0 ? void 0 : _e[tokenYMint]) === null || _f === void 0 ? void 0 : _f.price) || 0;
+                const priceResponse = yield axios_1.default.get(`https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`);
+                const tokenXPrice = ((_j = (_h = priceResponse.data.data) === null || _h === void 0 ? void 0 : _h[tokenXMint]) === null || _j === void 0 ? void 0 : _j.price) || 0;
+                const tokenYPrice = ((_l = (_k = priceResponse.data.data) === null || _k === void 0 ? void 0 : _k[tokenYMint]) === null || _l === void 0 ? void 0 : _l.price) || 0;
                 // Get token decimals from pair info
                 const poolMetadata = yield liquidityBookService.fetchPoolMetadata(marketAddress);
                 const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
@@ -118,7 +196,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                     const percentageChange = ((currentValue - previousValue) / previousValue) * 100;
                     if (Math.abs(percentageChange) >= 10) {
                         console.log(`🚨 Value change detected: ${percentageChange.toFixed(2)}%`);
-                        const chatId = (_g = position.user) === null || _g === void 0 ? void 0 : _g.telegram_id;
+                        const chatId = (_m = position.user) === null || _m === void 0 ? void 0 : _m.telegram_id;
                         if (chatId) {
                             const emoji = percentageChange > 0 ? "📈" : "📉";
                             const direction = percentageChange > 0 ? "increased" : "decreased";
@@ -173,7 +251,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                         const shouldNotify = lastILWarningPercent === 0 || ilDifference >= IL_NOTIFICATION_STEP;
                         if (shouldNotify) {
                             console.log(`🚨 IL Warning: ${impermanentLossPercentage.toFixed(2)}%`);
-                            const chatId = (_h = position.user) === null || _h === void 0 ? void 0 : _h.telegram_id;
+                            const chatId = (_o = position.user) === null || _o === void 0 ? void 0 : _o.telegram_id;
                             if (chatId) {
                                 const emoji = impermanentLossPercentage < -10 ? "🔴" : "⚠️";
                                 const ilAbsolute = Math.abs(impermanentLossPercentage);
@@ -207,7 +285,7 @@ const monitor = () => __awaiter(void 0, void 0, void 0, function* () {
                     else if (impermanentLossPercentage > 0 && lastILWarningPercent < 0) {
                         // IL has recovered to positive (user is now ahead)
                         console.log(`✅ IL Recovered: ${impermanentLossPercentage.toFixed(2)}%`);
-                        const chatId = (_j = position.user) === null || _j === void 0 ? void 0 : _j.telegram_id;
+                        const chatId = (_p = position.user) === null || _p === void 0 ? void 0 : _p.telegram_id;
                         if (chatId) {
                             const text = `✅ **Good News!**\n\n` +
                                 `Your position IL has recovered!\n\n` +

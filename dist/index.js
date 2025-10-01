@@ -230,7 +230,7 @@ bot.on("text", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
             const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
             const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
             // Fetch current token prices
-            const priceResponse = yield axios_1.default.get(`https://api.jup.ag/price/v2?ids=${tokenXMint},${tokenYMint}`);
+            const priceResponse = yield axios_1.default.get(`https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`);
             const tokenXPrice = ((_b = (_a = priceResponse.data.data) === null || _a === void 0 ? void 0 : _a[tokenXMint]) === null || _b === void 0 ? void 0 : _b.price) || 0;
             const tokenYPrice = ((_d = (_c = priceResponse.data.data) === null || _c === void 0 ? void 0 : _c[tokenYMint]) === null || _d === void 0 ? void 0 : _d.price) || 0;
             // Calculate initial values for each position

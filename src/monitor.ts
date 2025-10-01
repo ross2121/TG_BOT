@@ -17,11 +17,100 @@ const liquidityBookService = new LiquidityBookServices({
 export const monitor = async () => {
     setInterval(async()=>{
         console.log("Starting position monitor...");
-
+          
         const positions = await prisma.position.findMany({
-            include: { user: { select: { telegram_id: true, public_key: true } } }
+            include: { user: { select: { telegram_id: true, public_key: true, id: true } } }
         });
+
         console.log(`Found ${positions.length} positions to monitor`)
+
+        // --- Sync any new on-chain positions into DB per (user, market) ---
+        const uniqueCombos = new Map<string, { userId: string; wallet: string; market: string }>();
+        for (const p of positions) {
+            if (!p.user?.public_key) continue;
+            const key = `${p.user.id}:${p.Market}`;
+            if (!uniqueCombos.has(key)) {
+                uniqueCombos.set(key, { userId: p.user.id, wallet: p.user.public_key, market: p.Market });
+            }
+        }
+
+        for (const { userId, wallet, market } of uniqueCombos.values()) {
+            try {
+                // Fetch on-chain positions for this user+market
+                const onchainPositions = await liquidityBookService.getUserPositions({
+                    payer: new PublicKey(wallet),
+                    pair: new PublicKey(market)
+                });
+
+                if (!onchainPositions?.length) continue;
+
+                // Get pair info, decimals and current prices (for initial snapshot)
+                const pairInfo = await liquidityBookService.getPairAccount(new PublicKey(market));
+                const poolMetadata = await liquidityBookService.fetchPoolMetadata(market);
+                const tokenXMint = pairInfo.tokenMintX.toString();
+                const tokenYMint = pairInfo.tokenMintY.toString();
+                const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
+                const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
+
+                const priceResponse = await axios.get(
+                    `https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`
+                );
+                const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
+                const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;
+
+                // Get already stored mints for this user+market
+                const existing = await prisma.position.findMany({
+                    where: { userId, Market: market },
+                    select: { mint: true }
+                });
+                const existingMints = new Set(existing.map(e => e.mint));
+
+                // For any new on-chain position not in DB, create it with initial snapshot
+                for (const ocp of onchainPositions) {
+                    const mintStr = ocp.positionMint.toString();
+                    if (existingMints.has(mintStr)) continue;
+
+                    // Compute initial reserves
+                    const reserveInfo = await liquidityBookService.getBinsReserveInformation({
+                        position: new PublicKey(ocp.position),
+                        pair: new PublicKey(market),
+                        payer: new PublicKey(wallet)
+                    });
+
+                    let totalTokenX = 0;
+                    let totalTokenY = 0;
+                    reserveInfo.forEach(bin => {
+                        totalTokenX += Number(bin.reserveX);
+                        totalTokenY += Number(bin.reserveY);
+                    });
+
+                    const initA = totalTokenX / Math.pow(10, tokenXDecimals);
+                    const initB = totalTokenY / Math.pow(10, tokenYDecimals);
+
+                    await prisma.position.create({
+                        data: {
+                            userId,
+                            mint: mintStr,
+                            lowerId: ocp.lowerBinId.toString(),
+                            upperId: ocp.upperBinId.toString(),
+                            Market: market,
+                            Status: 'Active',
+                            Previous: 0.0,
+                            initialTokenAAmount: initA,
+                            initialTokenBAmount: initB,
+                            initialTokenAPriceUSD: tokenXPrice,
+                            initialTokenBPriceUSD: tokenYPrice,
+                            lastILWarningPercent: 0.0
+                        }
+                    });
+                    console.log(`Synced new position ${mintStr} for user ${userId} in market ${market}`);
+                }
+            } catch (e) {
+                console.error(`Sync error for user ${userId} market ${market}:`, e);
+            }
+        }
+
+        // --- Proceed with monitoring all stored positions ---
         for (let i = 0; i < positions.length; i++) {
             const position = positions[i];
             const marketAddress = position.Market;
@@ -99,7 +188,7 @@ export const monitor = async () => {
                 const tokenYMint = pairInfo.tokenMintY.toString();
                 
                 const priceResponse = await axios.get(
-                    `https://api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`
+                    `https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`
                 );
                 
                 const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
