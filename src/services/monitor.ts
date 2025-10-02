@@ -4,7 +4,6 @@ import { PublicKey } from "@solana/web3.js";
 import axios from "axios";
 import { Telegraf } from "telegraf";
 
-// Reuse singletons to avoid opening too many DB and network connections
 const prisma = new PrismaClient();
 const bot = new Telegraf(process.env.TELEGRAM_API || "");
 const liquidityBookService = new LiquidityBookServices({
@@ -17,14 +16,13 @@ const liquidityBookService = new LiquidityBookServices({
 export const monitor = async () => {
     setInterval(async()=>{
         console.log("Starting position monitor...");
-          
+           
         const positions = await prisma.position.findMany({
             include: { user: { select: { telegram_id: true, public_key: true, id: true } } }
         });
 
         console.log(`Found ${positions.length} positions to monitor`)
 
-        // --- Sync any new on-chain positions into DB per (user, market) ---
         const uniqueCombos = new Map<string, { userId: string; wallet: string; market: string }>();
         for (const p of positions) {
             if (!p.user?.public_key) continue;
@@ -36,7 +34,6 @@ export const monitor = async () => {
 
         for (const { userId, wallet, market } of uniqueCombos.values()) {
             try {
-                // Fetch on-chain positions for this user+market
                 const onchainPositions = await liquidityBookService.getUserPositions({
                     payer: new PublicKey(wallet),
                     pair: new PublicKey(market)
@@ -44,7 +41,6 @@ export const monitor = async () => {
 
                 if (!onchainPositions?.length) continue;
 
-                // Get pair info, decimals and current prices (for initial snapshot)
                 const pairInfo = await liquidityBookService.getPairAccount(new PublicKey(market));
                 const poolMetadata = await liquidityBookService.fetchPoolMetadata(market);
                 const tokenXMint = pairInfo.tokenMintX.toString();
@@ -58,19 +54,16 @@ export const monitor = async () => {
                 const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
                 const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;
 
-                // Get already stored mints for this user+market
                 const existing = await prisma.position.findMany({
                     where: { userId, Market: market },
                     select: { mint: true }
                 });
                 const existingMints = new Set(existing.map(e => e.mint));
 
-                // For any new on-chain position not in DB, create it with initial snapshot
                 for (const ocp of onchainPositions) {
                     const mintStr = ocp.positionMint.toString();
                     if (existingMints.has(mintStr)) continue;
 
-                    // Compute initial reserves
                     const reserveInfo = await liquidityBookService.getBinsReserveInformation({
                         position: new PublicKey(ocp.position),
                         pair: new PublicKey(market),
@@ -110,7 +103,6 @@ export const monitor = async () => {
             }
         }
 
-        // --- Proceed with monitoring all stored positions ---
         for (let i = 0; i < positions.length; i++) {
             const position = positions[i];
             const marketAddress = position.Market;
@@ -125,7 +117,6 @@ export const monitor = async () => {
                 
                 console.log(`Active bin: ${activeBin}, Position range: ${lowerBinId} - ${upperBinId}`);
                 
-                // Check if position is out of range
                 const isOutOfRange = activeBin < lowerBinId || activeBin > upperBinId;
                 if (isOutOfRange) {
                     console.log(`⚠️  Position ${position.mint} is out of range!`);
@@ -149,13 +140,11 @@ export const monitor = async () => {
                     continue;
                 }
                 
-                // Get all user positions for this pair to find the actual position account
                 const poolPositions = await liquidityBookService.getUserPositions({
                     payer: new PublicKey(userPublicKey),
-                    pair: new PublicKey(marketAddress)
+                    pair: new PublicKey(marketAddress)                                                                                                              
                 });
                 
-                // Find the matching position by mint address
                 const matchingPosition = poolPositions.find(
                     p => p.positionMint.toString() === position.mint
                 );
@@ -164,17 +153,15 @@ export const monitor = async () => {
                     console.log(`Position ${position.mint} not found in current user positions`);
                     continue;
                 }
-                
-                // Use the actual position account address, not the mint
+
                 const positionAddress = new PublicKey(matchingPosition.position);
                 
-                // Get token amounts from reserves
                 const reserveInfo = await liquidityBookService.getBinsReserveInformation({
                     position: positionAddress,
                     pair: new PublicKey(marketAddress),
                     payer: new PublicKey(userPublicKey)
                 });
-                // Calculate total token amounts
+                
                 let totalTokenX = 0;
                 let totalTokenY = 0;
                 
@@ -183,7 +170,6 @@ export const monitor = async () => {
                     totalTokenY += Number(bin.reserveY);
                 });
                 
-                // Get token prices from Jupiter API
                 const tokenXMint = pairInfo.tokenMintX.toString();
                 const tokenYMint = pairInfo.tokenMintY.toString();
                 
@@ -194,21 +180,17 @@ export const monitor = async () => {
                 const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
                 const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;
                 
-                // Get token decimals from pair info
                 const poolMetadata = await liquidityBookService.fetchPoolMetadata(marketAddress);
                 const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
                 const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
                 
-                // Adjust for decimals
                 const adjustedTokenX = totalTokenX / Math.pow(10, tokenXDecimals);
                 const adjustedTokenY = totalTokenY / Math.pow(10, tokenYDecimals);
                 
-                // Calculate total USD value
                 const currentValue = (adjustedTokenX * tokenXPrice) + (adjustedTokenY * tokenYPrice);
                 
                 console.log(`Position value: $${currentValue.toFixed(2)} (Token X: ${adjustedTokenX.toFixed(4)}, Token Y: ${adjustedTokenY.toFixed(4)})`);
                 
-                // Check if value changed by 10% or more
                 const previousValue = position.Previous;
                 
                 if (previousValue > 0) {
@@ -237,14 +219,12 @@ export const monitor = async () => {
                             }
                         }
                         
-                        // Update the Previous value in database
                         await prisma.position.update({
                             where: { id: position.id },
                             data: { Previous: currentValue }
                         });
                     }
                 } else {
-                    // First time monitoring, just set the current value
                     console.log(`Setting initial value: $${currentValue.toFixed(2)}`);
                     await prisma.position.update({
                         where: { id: position.id },
@@ -252,11 +232,9 @@ export const monitor = async () => {
                     });
                 }
                 
-                // ========== IMPERMANENT LOSS CALCULATION ==========
-                const IL_THRESHOLD = -5; // 5% loss threshold
-                const IL_NOTIFICATION_STEP = 2.5; // Only notify every 2.5% additional loss
+                const IL_THRESHOLD = -5;
+                const IL_NOTIFICATION_STEP = 2.5;
                 
-                // Get initial data from database
                 const {
                     initialTokenAAmount,
                     initialTokenBAmount,
@@ -265,12 +243,9 @@ export const monitor = async () => {
                     lastILWarningPercent
                 } = position;
                 
-                // Only calculate IL if we have initial data
                 if (initialTokenAAmount > 0 || initialTokenBAmount > 0) {
-                    // Calculate "Value if Held" (HODL value)
                     const valueIfHeld = (initialTokenAAmount * tokenXPrice) + (initialTokenBAmount * tokenYPrice);
                     
-                    // Calculate Impermanent Loss Percentage
                     let impermanentLossPercentage = 0;
                     if (valueIfHeld > 0) {
                         impermanentLossPercentage = ((currentValue - valueIfHeld) / valueIfHeld) * 100;
@@ -278,9 +253,7 @@ export const monitor = async () => {
                     
                     console.log(`IL Check: Current: $${currentValue.toFixed(2)}, HODL: $${valueIfHeld.toFixed(2)}, IL: ${impermanentLossPercentage.toFixed(2)}%`);
                     
-                    // Check if IL threshold is crossed
                     if (impermanentLossPercentage <= IL_THRESHOLD) {
-                        // Check if this is a new warning or IL got significantly worse
                         const ilDifference = Math.abs(impermanentLossPercentage - lastILWarningPercent);
                         const shouldNotify = lastILWarningPercent === 0 || ilDifference >= IL_NOTIFICATION_STEP;
                         
@@ -313,14 +286,12 @@ export const monitor = async () => {
                                 }
                             }
                             
-                            // Update the last IL warning percentage
                             await prisma.position.update({
                                 where: { id: position.id },
                                 data: { lastILWarningPercent: impermanentLossPercentage }
                             });
                         }
                     } else if (impermanentLossPercentage > 0 && lastILWarningPercent < 0) {
-                        // IL has recovered to positive (user is now ahead)
                         console.log(`✅ IL Recovered: ${impermanentLossPercentage.toFixed(2)}%`);
                         
                         const chatId = position.user?.telegram_id;
@@ -338,7 +309,6 @@ export const monitor = async () => {
                             }
                         }
                         
-                        // Reset the warning tracker
                         await prisma.position.update({
                             where: { id: position.id },
                             data: { lastILWarningPercent: 0 }
@@ -352,7 +322,7 @@ export const monitor = async () => {
         }
         
         console.log("Monitor check complete");
-    },9000) // 15 minutes
+    }, 900000) // 15 minutes
     
 }
 
@@ -369,14 +339,12 @@ export const calculatepositon=async(
         },
     });
     
-    // Get the reserves (token amounts) for the position
     const reserves = await liquidityBookService.getBinsReserveInformation({
         position: new PublicKey(positionAddress),
         pair: new PublicKey(pairAddress),
-        payer: new PublicKey("11111111111111111111111111111111") // Dummy payer for read-only
+        payer: new PublicKey("11111111111111111111111111111111")
     });
     
-    // Sum up all reserves across all bins
     let totalTokenA = 0;
     let totalTokenB = 0;
     
@@ -388,14 +356,12 @@ export const calculatepositon=async(
     console.log(`Token A amount: ${totalTokenA}`);
     console.log(`Token B amount: ${totalTokenB}`);
     
-    // Get USD prices from Jupiter
     const response = await axios.get(`https://lite-api.jup.ag/price/v3?ids=${tokenAMint},${tokenBMint}`);
     const data = response.data;
     
     const tokenAPrice = data[tokenAMint]?.usdPrice || 0;
     const tokenBPrice = data[tokenBMint]?.usdPrice || 0;
     
-    // Calculate total USD value
     const totalValue = (totalTokenA * tokenAPrice) + (totalTokenB * tokenBPrice);
     
     return {

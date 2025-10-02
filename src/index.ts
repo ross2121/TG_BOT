@@ -3,44 +3,43 @@ import dotenv from "dotenv";
 import { PublicKey } from "@solana/web3.js";
 import { LiquidityBookServices, MODE, PoolMetadata } from "@saros-finance/dlmm-sdk";
 import { PrismaClient, Status } from "@prisma/client";
-import { calculatepositon, monitor } from "./monitor";
-import { generateWallet, encryptPrivateKey } from "./auth";
-import { handleSwapCommand, handleSwapFlow } from "./swapHandler";
-import express from "express";
+import { monitor } from "./services/monitor";
+import { generateWallet, encryptPrivateKey } from "./services/auth";
+import { handleSwapCommand, handleSwapFlow } from "./services/swapHandler";
+import { cleopatraStrategy } from "./strategies/strategy";
+import { UserState } from "./types";
+import { DEFAULT_KEYBOARD } from "./utils/constants";
 import bs58 from "bs58";
 import axios from "axios";
+
 dotenv.config();
-const port = process.env.PORT || 4000 ;
-const app = express();
-app.listen(port, () => {
-    console.log(`Example app listening on port ${port}`)
-  })
-const prisma=new PrismaClient();
+
+const prisma = new PrismaClient();
 const bot = new Telegraf(process.env.TELEGRAM_API || "");
-const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
-const userStates = new Map();
-const DEFAULT_KEYBOARD = Markup.inlineKeyboard([
+const userStates = new Map<number, UserState>();
+
+const mainKeyboard = Markup.inlineKeyboard([
     [Markup.button.callback("📊 Track Wallet Positions", "track_positions")],
     [Markup.button.callback("🔐 Create New Wallet", "create_wallet")],
     [Markup.button.callback("🔄 Swap Tokens", "swap_tokens")],
-    [Markup.button.callback("💼 Manage Wallet", "manage_wallet")]
+    [Markup.button.callback("💼 Manage Wallet", "manage_wallet")],
+    [Markup.button.callback("🚀 Start Strategy", "start_strategy")],
+    [Markup.button.callback("⏹️ Stop Strategy", "stop_strategy")],
+    [Markup.button.callback("📈 Exit Position", "exit_position")]
 ]);
-type Postion={
- mint:string,
- Lower:string,
-Upper:string
-}
-bot.start(async (ctx) => {                                                                                                              
+
+bot.start(async (ctx) => {
     await ctx.reply("Welcome to the Saros DLMM Bot! 🚀\n\nChoose an option to begin:", {
-        ...DEFAULT_KEYBOARD
-    });                                                                                                                                                                                                         
+        ...mainKeyboard
+    });
 });
 
 bot.command("menu", async (ctx) => {
     await ctx.reply("Main Menu:", {
-        ...DEFAULT_KEYBOARD
+        ...mainKeyboard
     });
 });
+
 bot.action("track_positions", async (ctx) => {
     userStates.set(ctx.from.id, { step: 'awaiting_pool' });
     await ctx.reply("🏊 Please enter the pool address you want to analyze:");
@@ -54,7 +53,6 @@ bot.action("create_wallet", async (ctx) => {
     try {
         const userId = ctx.from.id;
         
-    
         const existingUser = await prisma.user.findUnique({
             where: { telegram_id: userId.toString() }
         });
@@ -65,13 +63,10 @@ bot.action("create_wallet", async (ctx) => {
             return;
         }
         
-        // Generate new wallet
         const wallet = generateWallet();
         const { encrypted, iv } = encryptPrivateKey(wallet.secretKey);
         
-        // Save to database
         if (existingUser) {
-            // Update existing user with wallet
             await prisma.user.update({
                 where: { telegram_id: userId.toString() },
                 data: {
@@ -81,7 +76,6 @@ bot.action("create_wallet", async (ctx) => {
                 }
             });
         } else {
-            // Create new user with wallet
             await prisma.user.create({
                 data: {
                     telegram_id: userId.toString(),
@@ -92,7 +86,6 @@ bot.action("create_wallet", async (ctx) => {
             });
         }
         
-        // Convert secret key to base58 for display
         const privateKeyBase58 = bs58.encode(wallet.secretKey);
         
         await ctx.reply(
@@ -125,12 +118,11 @@ bot.action("manage_wallet", async (ctx) => {
             await ctx.reply(
                 "❌ You don't have a wallet yet!\n\n" +
                 "Click 'Create New Wallet' to get started.",
-                { ...DEFAULT_KEYBOARD }
+                { ...mainKeyboard }
             );
             return;
         }
         
-        // Show wallet info with management options
         const managementKeyboard = Markup.inlineKeyboard([
             [Markup.button.callback("🔴 Disconnect Wallet", "disconnect_wallet")],
             [Markup.button.callback("◀️ Back to Menu", "back_to_menu")]
@@ -173,12 +165,10 @@ bot.action("confirm_disconnect", async (ctx) => {
     try {
         const userId = ctx.from.id;
         
-        // Delete all positions first
         await prisma.position.deleteMany({
             where: { user: { telegram_id: userId.toString() } }
         });
         
-        // Delete the user and wallet
         await prisma.user.delete({
             where: { telegram_id: userId.toString() }
         });
@@ -187,7 +177,7 @@ bot.action("confirm_disconnect", async (ctx) => {
             `✅ **Wallet Disconnected Successfully**\n\n` +
             `Your wallet and all positions have been removed from the bot.\n\n` +
             `You can create a new wallet or reconnect anytime!`,
-            { ...DEFAULT_KEYBOARD }
+            { ...mainKeyboard }
         );
         
     } catch (error) {
@@ -199,39 +189,78 @@ bot.action("confirm_disconnect", async (ctx) => {
 bot.action("cancel_disconnect", async (ctx) => {
     await ctx.reply(
         "✅ Cancelled. Your wallet is still connected.",
-        { ...DEFAULT_KEYBOARD }
+        { ...mainKeyboard }
     );
 });
 
 bot.action("back_to_menu", async (ctx) => {
     await ctx.reply(
         "Welcome back! Choose an option:",
-        { ...DEFAULT_KEYBOARD }
+        { ...mainKeyboard }
     );
 });
+
+bot.action("start_strategy", async (ctx) => {
+    try {
+        const userId = ctx.from.id.toString();
+        await cleopatraStrategy.startStrategy(userId);
+        await ctx.reply(
+            "🚀 **Cleopatra Strategy Started!**\n\n" +
+            "Your bot will now:\n" +
+            "• Find the best pools automatically\n" +
+            "• Execute 50/50 swaps\n" +
+            "• Create ±20 bin liquidity positions\n" +
+            "• Monitor and rebalance every hour\n" +
+            "• Compound earnings",
+            { parse_mode: 'Markdown' }
+        );
+    } catch (error) {
+        console.error("Error starting strategy:", error);
+        await ctx.reply("❌ Failed to start strategy. Make sure you have a wallet and sufficient balance.");
+    }
+});
+
+bot.action("stop_strategy", async (ctx) => {
+    try {
+        const userId = ctx.from.id.toString();
+        await cleopatraStrategy.stopStrategy(userId);
+        await ctx.reply("⏹️ **Strategy Stopped**\n\nYour Cleopatra strategy has been stopped.", { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.error("Error stopping strategy:", error);
+        await ctx.reply("❌ Failed to stop strategy.");
+    }
+});
+
+bot.action("exit_position", async (ctx) => {
+    userStates.set(ctx.from.id, { step: 'awaiting_position_mint' });
+    await ctx.reply("📈 **Exit Position**\n\nPlease enter the position mint address you want to exit:");
+});
+
 bot.on("text", async (ctx) => {
     const userId = ctx.from.id;
     const message = ctx.message.text;
     const userState = userStates.get(userId);
+    
     if (!userState) {
         await ctx.reply("Please use the menu buttons to start! 👆", {
-            ...DEFAULT_KEYBOARD
+            ...mainKeyboard
         });
         return;
     }
     
-    // Handle swap flow
     if (userState.swapState) {
         await handleSwapFlow(ctx, message, userId, userStates);
         return;
     }
-     try {
-         const liquidityBookService = new LiquidityBookServices({
-             mode: MODE.MAINNET,
-             options: {
-                 rpcUrl: RPC_URL,
-             },
-         });
+    
+    try {
+        const liquidityBookService = new LiquidityBookServices({
+            mode: MODE.MAINNET,
+            options: {
+                rpcUrl: process.env.RPC_URL || "https://api.mainnet-beta.solana.com",
+            },
+        });
+
         if (userState.step === 'awaiting_pool') {
             try {
                 new PublicKey(message);
@@ -243,7 +272,7 @@ bot.on("text", async (ctx) => {
             userState.step = 'awaiting_wallet';
             await ctx.reply(`✅ Pool address saved: ${message}\n\n📝 Now, please enter the wallet public key to check for positions:`);
         } else if (userState.step === 'awaiting_wallet') {
-            const poolAddress = userState.pool;
+            const poolAddress = userState.pool!;
             const walletAddress = message;
             try {
                 new PublicKey(walletAddress);
@@ -266,7 +295,6 @@ bot.on("text", async (ctx) => {
             response += `👤 **Wallet:** \`${walletAddress}\`\n`;
             response += `📊 **Total Positions Found:** ${positions.length}\n\n`;
             
-            // Get pair info for token prices and decimals
             const pairInfo = await liquidityBookService.getPairAccount(new PublicKey(poolAddress));
             const poolMetadata = await liquidityBookService.fetchPoolMetadata(poolAddress);
             const tokenXMint = pairInfo.tokenMintX.toString();
@@ -274,16 +302,13 @@ bot.on("text", async (ctx) => {
             const tokenXDecimals = poolMetadata.extra.tokenBaseDecimal;
             const tokenYDecimals = poolMetadata.extra.tokenQuoteDecimal;
             
-            // Fetch current token prices
             const priceResponse = await axios.get(
                 `https://lite-api.jup.ag/price/v3?ids=${tokenXMint},${tokenYMint}`
             );
             const tokenXPrice = priceResponse.data.data?.[tokenXMint]?.price || 0;
             const tokenYPrice = priceResponse.data.data?.[tokenYMint]?.price || 0;
             
-            // Calculate initial values for each position
             const positionData = await Promise.all(positions.map(async (position) => {
-                // Get reserve information for this position
                 const positionAddress = new PublicKey(position.position);
                 const reserveInfo = await liquidityBookService.getBinsReserveInformation({
                     position: positionAddress,
@@ -291,7 +316,6 @@ bot.on("text", async (ctx) => {
                     payer: new PublicKey(walletAddress)
                 });
                 
-                // Calculate total token amounts
                 let totalTokenX = 0;
                 let totalTokenY = 0;
                 reserveInfo.forEach(bin => {
@@ -299,7 +323,6 @@ bot.on("text", async (ctx) => {
                     totalTokenY += Number(bin.reserveY);
                 });
                 
-                // Adjust for decimals
                 const adjustedTokenX = totalTokenX / Math.pow(10, tokenXDecimals);
                 const adjustedTokenY = totalTokenY / Math.pow(10, tokenYDecimals);
                 
@@ -325,13 +348,11 @@ bot.on("text", async (ctx) => {
                 response += ` •  *Upper Bin ID:* ${position.upperBinId}\n\n`;
             });
             
-            // Check if user exists
             const existingUser = await prisma.user.findUnique({
                 where: { telegram_id: userId.toString() }
             });
             
             if (existingUser) {
-                // User exists - delete old positions and add new ones
                 await prisma.position.deleteMany({
                     where: { 
                         userId: existingUser.id,
@@ -346,7 +367,6 @@ bot.on("text", async (ctx) => {
                     }))
                 });
             } else {
-                // Create new user with positions
                 await prisma.user.create({
                     data: {
                         telegram_id: userId.toString(),
@@ -358,106 +378,27 @@ bot.on("text", async (ctx) => {
                 });
             }
             await ctx.reply(response, { parse_mode: 'Markdown' });
-            userStates.delete(userId); // Clean up state after completion
+            userStates.delete(userId);
+        } else if (userState.step === 'awaiting_position_mint') {
+            try {
+                new PublicKey(message);
+                const userId = ctx.from.id.toString();
+                await cleopatraStrategy.exitPosition(userId, message);
+                await ctx.reply(`✅ **Position Exited**\n\nPosition \`${message}\` has been successfully exited.`, { parse_mode: 'Markdown' });
+            } catch (error) {
+                console.error("Error exiting position:", error);
+                await ctx.reply("❌ Failed to exit position. Please check the position mint address.");
+            }
+            userStates.delete(userId);
         }
 
     } catch (error) {
         console.error("Error:", error);
         await ctx.reply("❌ An unexpected error occurred. Please try again.");
-        userStates.delete(userId); // Clean up state on error
+        userStates.delete(userId);
     }
 });
 
-async function temp(){
-    const liquidityBookService = new LiquidityBookServices({
-        mode: MODE.MAINNET,
-    });
-    const publickey=new PublicKey("2sZfUCe5q55K1MjYP7HYRmU2Br6MS7DATtzSqgbZGtaN");
-    // const data= await liquidityBookService.getPositionAccount(publickey);
-    // console.log(data);
-    const pairInfo = await liquidityBookService.getPairAccount(new PublicKey("9P3N4QxjMumpTNNdvaNNskXu2t7VHMMXtePQB72kkSAk"));
-            const activeBin = pairInfo.activeId;
-        const pool=await liquidityBookService.fetchPoolAddresses();
-        // console.log(pool);    
-//         const pul= await   liquidityBookService.
-//    console.log(pul);                                                                                                                                                                                                                                                                         
-     const pairAddress = new PublicKey("8vZHTVMdYvcPFUoHBEbcFyfSKnjWtvbNgYpXg1aiC2uS");
-                                                                                                                                                                                                                                                                                                                                                                    const poolPositions = await liquidityBookService.getUserPositions({
-                                                                                                                                                                                                                                                                                                                                                                        payer:publickey,
-                                                                                                                                                                                                                                                                                                                                                                        pair: pairAddress
-                                                                                                                                                                                                                                                                                                                                                                    });
-                                                                                                                                                                                                                                                                                                                                                                                                                    
-    console.log(poolPositions[0])
-    
-    // Get actual token amounts from the position
-    if (poolPositions.length > 0) {
-        // Get the current active bin of the pool
-        const currentPairInfo = await liquidityBookService.getPairAccount(pairAddress);
-        const currentActiveBin = currentPairInfo.activeId;
-        
-        const positionAddress = new PublicKey(poolPositions[0].position);
-        const reserveInfo = await liquidityBookService.getBinsReserveInformation({
-            position: positionAddress,
-            pair: pairAddress,
-            payer: publickey
-        });
-        console.log(reserveInfo);
-        // Calculate total token amounts across all bins
-        // let totalTokenX = 0;
-        // let totalTokenY = 0;
-        
-        // reserveInfo.forEach(bin => {
-        //     totalTokenX += Number(bin.reserveX);
-        //     totalTokenY += Number(bin.reserveY);
-        // });
-        
-        // console.log("\n=== Pool & Position Info ===");
-        // console.log("Current Active Bin ID:", currentActiveBin);
-        // console.log("Your Position Range: Bins", poolPositions[0].lowerBinId, "to", poolPositions[0].upperBinId);
-        // console.log("\nExplanation:");
-        // if (currentActiveBin < poolPositions[0].lowerBinId) {
-        //     console.log("✓ Current price is BELOW your position range");
-        //     console.log("✓ That's why you only have Token Y (quote token)");
-        //     console.log("✓ As price rises into your range, Token Y will convert to Token X");
-        // } else if (currentActiveBin > poolPositions[0].upperBinId) {
-        //     console.log("✓ Current price is ABOVE your position range");
-        //     console.log("✓ That's why you only have Token X (base token)");
-        //     console.log("✓ As price falls into your range, Token X will convert to Token Y");
-        // } else {
-        //     console.log("✓ Current price is WITHIN your position range");
-        //     console.log("✓ You should have both tokens in the active bin");
-        // }
-        
-        // console.log("\n=== Position Token Amounts ===");
-        // console.log("Total Token X (Base):", totalTokenX);
-        // console.log("Total Token Y (Quote):", totalTokenY);
-        // console.log("\nDetailed bin reserves:", reserveInfo);
-    }
-    // const result = await liquidityBookService.getPositionAccount(new PublicKey("GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY"));
-    // const poolinfor:PoolMetadata=await liquidityBookService.fetchPoolMetadata(pool[1]);  
-    //    const poolionf=await liquidityBookService.getPairAccount(new PublicKey(poolinfor.poolAddress));
-    //    console.log(liquidityBookService.getDexName());
-    //    console.log(poolionf.tokenMintX);
-    //    console.log(poolionf.tokenMintX);
-    // const response = await axios.get(`https://lite-api.jup.ag/price/v3?ids=${poolinfor.poolAddress}`);
-    // console.log(response.data);
-// const tokenData = response.data.data[poolionf.tokenMintX];
-// console.log(tokenData.symbol); // Token symbol
-// console.log(tokenData.name);
-
-    // console.log(result);
-    // console.log(poolPositions);
-    // console.log(pairInfo);
-    //8377610
-}
 monitor();
-// Example usage:
-// calculatepositon(
-//     "GhYac22LPuLizrHkWJcyZ7ZAQKNEXjpH2Jw5dD98BvAY", // position address
-//     "Cpjn7PkhKs5VMJ1YAb2ebS5AEGXUgRsxQHt38U8aefK3", // pair address
-//     "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA", // token A mint
-//     "CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn"  // token B mint
-// ).then(result => console.log(result));
-temp();
 bot.launch();
 console.log("Bot is running...");

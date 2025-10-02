@@ -17,7 +17,6 @@ export const encryptPrivateKey = (secretKey: Uint8Array): { encrypted: string, i
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv(algorithm, key, iv);
     
-    // Convert secret key to base58 string first
     const secretKeyBase58 = bs58.encode(secretKey);
     
     let encrypted = cipher.update(secretKeyBase58, 'utf8', 'hex');
@@ -37,6 +36,5 @@ export const decryptPrivateKey = (encrypted: string, ivHex: string): Uint8Array 
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     
-    // Decode from base58 back to Uint8Array
     return bs58.decode(decrypted);
 };
