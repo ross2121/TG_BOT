@@ -6,9 +6,15 @@ import { PrismaClient, Status } from "@prisma/client";
 import { calculatepositon, monitor } from "./monitor";
 import { generateWallet, encryptPrivateKey } from "./auth";
 import { handleSwapCommand, handleSwapFlow } from "./swapHandler";
+import express from "express";
 import bs58 from "bs58";
 import axios from "axios";
 dotenv.config();
+const port = process.env.PORT || 4000 ;
+const app = express();
+app.listen(port, () => {
+    console.log(`Example app listening on port ${port}`)
+  })
 const prisma=new PrismaClient();
 const bot = new Telegraf(process.env.TELEGRAM_API || "");
 const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
@@ -48,7 +54,7 @@ bot.action("create_wallet", async (ctx) => {
     try {
         const userId = ctx.from.id;
         
-        // Check if user already has a wallet
+    
         const existingUser = await prisma.user.findUnique({
             where: { telegram_id: userId.toString() }
         });

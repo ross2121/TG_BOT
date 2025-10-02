@@ -20,9 +20,15 @@ const client_1 = require("@prisma/client");
 const monitor_1 = require("./monitor");
 const auth_1 = require("./auth");
 const swapHandler_1 = require("./swapHandler");
+const express_1 = __importDefault(require("express"));
 const bs58_1 = __importDefault(require("bs58"));
 const axios_1 = __importDefault(require("axios"));
 dotenv_1.default.config();
+const port = process.env.PORT || 4000;
+const app = (0, express_1.default)();
+app.listen(port, () => {
+    console.log(`Example app listening on port ${port}`);
+});
 const prisma = new client_1.PrismaClient();
 const bot = new telegraf_1.Telegraf(process.env.TELEGRAM_API || "");
 const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
@@ -49,7 +55,6 @@ bot.action("swap_tokens", (ctx) => __awaiter(void 0, void 0, void 0, function* (
 bot.action("create_wallet", (ctx) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = ctx.from.id;
-        // Check if user already has a wallet
         const existingUser = yield prisma.user.findUnique({
             where: { telegram_id: userId.toString() }
         });
