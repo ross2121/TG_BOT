@@ -352,7 +352,7 @@ export const monitor = async () => {
         }
         
         console.log("Monitor check complete");
-    },900000) // 15 minutes
+    },9000) // 15 minutes
     
 }
 
