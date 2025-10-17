@@ -10,7 +10,6 @@ A comprehensive Telegram bot for managing Saros DLMM (Dynamic Liquidity Market M
 - **Token Swapping**: Execute token swaps with custom slippage settings
 - **Impermanent Loss Monitoring**: Track IL with configurable thresholds and alerts
 
-### 🚀 Cleopatra Spot Strategy
 - **Pool Analysis**: Automatically finds the best pools by APR and fees
 - **Auto-Swap**: Executes 50/50 token swaps for balanced positions
 - **Concentrated Liquidity**: Creates ±20 bin positions around current price
